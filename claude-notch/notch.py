@@ -321,6 +321,7 @@ class Bridge(QObject):
     chatOpenChanged = Signal()
     settingsChanged = Signal()
     menuRequested = Signal()
+    detailsRequested = Signal()
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -423,6 +424,11 @@ class Bridge(QObject):
     def menu(self) -> None:
         """Open/close the orb menu (also reachable as `claude-notch menu`)."""
         self.menuRequested.emit()
+
+    @Slot()
+    def details(self) -> None:
+        """Pin/unpin the usage bubble with its details (`claude-notch details`)."""
+        self.detailsRequested.emit()
 
     # ── terminal ────────────────────────────────────────────────────────
     @staticmethod

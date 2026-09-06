@@ -91,7 +91,11 @@ Window {
         else if (chat) bridge.raiseTerminal()
         updateBubble()
     }
-    Connections { target: bridge; function onMenuRequested() { win.menuOpen = !win.menuOpen } }
+    Connections {
+        target: bridge
+        function onMenuRequested() { win.menuOpen = !win.menuOpen }
+        function onDetailsRequested() { win.pinInfo = !win.pinInfo }
+    }
 
     // ── input region: the window only reacts where something is drawn ──
     // Computed from the *target* geometry of each state (not the animated one),
@@ -403,13 +407,13 @@ Window {
         readonly property int r: 14
         // target (state) position — used for the input mask and the menu anchor
         readonly property real targetCx: win.chat ? win.width - win.stripW / 2
-                                        : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
+                                        : (win.showBubble ? win.width - win.bubbleW + 6 : win.width - 16)
         readonly property real targetCy: win.chat ? win.height - win.chatInset - 30
-                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 10
+                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 8
         // drawn position — follows the animated shape
         property real cx: win.chatVisual ? win.width - win.stripW / 2
-                                         : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
-        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 10
+                                         : (win.showBubble ? win.width - win.bubbleW + 6 : win.width - 16)
+        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 8
         Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
 
         x: cx - r - 4; y: cy - r - 4
@@ -441,9 +445,9 @@ Window {
                 } else {                                    // resting arc
                     ctx.lineCap = "round"
                     ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 7
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 6, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
+                    ctx.beginPath(); ctx.arc(cx + 7, cy - 5, R - 1, Math.PI * 0.42, Math.PI * 1.02); ctx.stroke()   // ╰ hook off the bubble's corner, sweeping right
                     ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.2
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 6, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
+                    ctx.beginPath(); ctx.arc(cx + 7, cy - 5, R - 1, Math.PI * 0.42, Math.PI * 1.02); ctx.stroke()   // ╰ hook off the bubble's corner, sweeping right
                 }
             }
         }

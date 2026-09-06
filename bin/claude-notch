@@ -28,7 +28,7 @@ start() {
 
 case "${1:-toggle}" in
   start)   start "${@:2}" ;;
-  toggle|show|hide|menu)
+  toggle|show|hide|menu|details)
            running || start
            call "$1" ;;
   stop)    stop ;;
@@ -38,7 +38,7 @@ case "${1:-toggle}" in
   -h|--help|help)
            sed -n '2p' "$0"; echo "  claude-notch start [-v]   start the notch (autostart does this at login)"
            echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
-           echo "  claude-notch menu         open the orb menu"
+           echo "  claude-notch menu         open the orb menu\n  claude-notch details      pin the usage bubble"
            echo "  claude-notch status | state | stop | restart" ;;
   *)       echo "claude-notch: unknown command '$1'" >&2; exit 2 ;;
 esac
