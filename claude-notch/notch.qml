@@ -224,10 +224,10 @@ Window {
         property color col: win.grow > 0.03 ? pal.background : (win.waiting ? pal.warn : win.colorFor(win.fiveHour))
         property real alpha: win.grow > 0.03 ? 1 : (win.waiting ? win.pulse : (win.stale ? 0.55 : win.breathe))
 
-        Behavior on sw   { NumberAnimation { duration: 360; easing.type: Easing.OutBack; easing.overshoot: 1.1 } }
-        Behavior on sh   { NumberAnimation { duration: 380; easing.type: Easing.OutBack; easing.overshoot: 1.25 } }
-        Behavior on rad  { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
-        Behavior on crad { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
+        Behavior on sw   { NumberAnimation { duration: 360; easing.type: Easing.OutBack; easing.overshoot: 0.55 } }
+        Behavior on sh   { NumberAnimation { duration: 380; easing.type: Easing.OutBack; easing.overshoot: 0.65 } }
+        Behavior on rad  { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.0 } }
+        Behavior on crad { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.0 } }
         Behavior on alpha{ NumberAnimation { duration: 200 } }
 
         onSwChanged:    cv.requestPaint()
@@ -287,9 +287,9 @@ Window {
 
         // Animate the flight only into the chat; on close snap, or the badge
         // would hang over the wallpaper while the shape is already collapsing.
-        Behavior on x     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
-        Behavior on y     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
-        Behavior on width { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+        Behavior on x     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 0.6 } }
+        Behavior on y     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 0.6 } }
+        Behavior on width { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 0.6 } }
 
         Item {
             id: ringBox
