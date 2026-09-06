@@ -404,16 +404,16 @@ Window {
     // ── the orb: an arc below the notch; a gear on hover; click → menu ──
     Item {
         id: orb
-        readonly property int r: 18
+        readonly property int r: 22
         // target (state) position — used for the input mask and the menu anchor
         readonly property real targetCx: win.chat ? win.width - win.stripW / 2
-                                        : (win.showBubble ? win.width - win.bubbleW / 2 - 6 : win.width - 16)
+                                        : (win.showBubble ? win.width - 18 : win.width - 16)
         readonly property real targetCy: win.chat ? win.height - win.chatInset - 30
-                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 30
+                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 18
         // drawn position — follows the animated shape
         property real cx: win.chatVisual ? win.width - win.stripW / 2
-                                         : (win.showBubble ? win.width - win.bubbleW / 2 - 6 : win.width - 16)
-        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 30
+                                         : (win.showBubble ? win.width - 18 : win.width - 16)
+        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 18
         Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
 
         x: cx - r - 4; y: cy - r - 4
@@ -428,8 +428,15 @@ Window {
             anchors.fill: parent
             onPaint: {
                 var ctx = getContext("2d"); ctx.reset()
-                var R = orb.r, cx = width / 2, cy = height / 2
+                var cx = width / 2, cy = height / 2
                 if (orb.hot) {
+                    // The gear sits on the hook: its rim follows the ) curve. Centre on the
+                    // curve's midpoint normal, one radius toward the concave side.
+                    var R = orb.r * 0.5
+                    var g0 = 6, Wx0 = win.width - orb.x, bb0 = (win.height + shape.sh) / 2 - orb.y, cr0 = shape.crad
+                    var mx = Wx0 - g0 - 0.25 * cr0, my = bb0 + g0 + 0.25 * cr0
+                    var sft = (R + 2) / Math.SQRT2
+                    cx = mx - sft; cy = my + sft
                     ctx.fillStyle = pal.background
                     ctx.beginPath(); ctx.arc(cx, cy, R + 2, 0, 2 * Math.PI); ctx.fill()
                     ctx.strokeStyle = "#ebebf0"; ctx.lineCap = "round"
@@ -442,16 +449,28 @@ Window {
                         ctx.lineTo(cx + Math.cos(a) * R * 0.90, cy + Math.sin(a) * R * 0.90)
                         ctx.stroke()
                     }
-                } else {                                    // resting arc
+                } else {
+                    // The hook echoes the bubble's bottom inverted corner: the same
+                    // quadratic curve the shape uses, offset outward by a few pixels.
+                    var g = 6
+                    var Wx = win.width - orb.x                          // screen edge, local
+                    var bb = (win.height + shape.sh) / 2 - orb.y        // shape bottom, local
+                    var cr = shape.crad
                     ctx.lineCap = "round"
-                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 8.5
-                    ctx.beginPath(); ctx.arc(cx - 5, cy + 7, R - 2, -Math.PI * 0.55, Math.PI * 0.02); ctx.stroke()   // ╮ quarter hook under the bubble, ending straight down
-                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 5.2
-                    ctx.beginPath(); ctx.arc(cx - 5, cy + 7, R - 2, -Math.PI * 0.55, Math.PI * 0.02); ctx.stroke()   // ╮ quarter hook under the bubble, ending straight down
+                    function hook() {
+                        ctx.beginPath()
+                        ctx.moveTo(Wx - cr - g, bb + g)
+                        ctx.quadraticCurveTo(Wx - g, bb + g, Wx - g, bb + cr + g)
+                        ctx.stroke()
+                    }
+                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 8; hook()
+                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.5; hook()
                 }
             }
         }
         onHotChanged: orbCv.requestPaint()
+        onCyChanged: orbCv.requestPaint()
+        Connections { target: shape; function onShChanged() { orbCv.requestPaint() } function onCradChanged() { orbCv.requestPaint() } }
         Connections { target: win; function onStaleChanged() { orbCv.requestPaint() } }
 
         HoverHandler { id: orbHover }
