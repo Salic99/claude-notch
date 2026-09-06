@@ -405,6 +405,18 @@ class Bridge(QObject):
     def quit(self) -> None:
         QGuiApplication.quit()
 
+    @Slot("QVariant")
+    def reportState(self, st) -> None:
+        if hasattr(st, "toVariant"):          # a JS object arrives as QJSValue
+            st = st.toVariant()
+        self._ui_state = dict(st) if isinstance(st, dict) else {}
+
+    @Slot(result=str)
+    def state(self) -> str:
+        """UI state as JSON — `claude-notch state`; handy when reporting bugs."""
+        return json.dumps({"chat": self._chat, "workdir": str(self._workdir),
+                           "terminal": self._terminal_running(), **getattr(self, "_ui_state", {})})
+
     @Slot()
     def menu(self) -> None:
         """Open/close the orb menu (also reachable as `claude-notch menu`)."""

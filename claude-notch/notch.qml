@@ -52,7 +52,7 @@ Window {
     // The shape follows chatVisual: immediately on open, but on close only after
     // the terminal has faded out — otherwise it would stick out of the collapsing shape.
     property bool chatVisual: false
-    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else collapseDelay.restart() }
+    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else collapseDelay.restart(); updateBubble() }
     Timer { id: collapseDelay; interval: cfg.timing.collapse_delay_ms; onTriggered: win.chatVisual = false }
 
     // The terminal is parked invisible at click time and revealed the instant the
@@ -68,7 +68,18 @@ Window {
     property bool menuOpen: false
     property string menuPage: "main"
     // The bubble stays while the pointer is on the orb or the menu is open.
-    readonly property bool showBubble: (hover || pinInfo || orbArea.containsMouse || menuOpen) && !chat
+    // Recomputed explicitly: a short-circuiting binding would not pick up
+    // menuOpen as a dependency until some earlier operand had changed.
+    property bool showBubble: false
+    function updateBubble() {
+        showBubble = !chat && (menuOpen || hover || pinInfo || orbArea.containsMouse)
+        bridge.reportState({ chat: chat, chatVisual: chatVisual, hover: hover, menuOpen: menuOpen,
+                             pinInfo: pinInfo, showBubble: showBubble, orbHover: orbArea.containsMouse,
+                             menuPage: menuPage })
+    }
+    onHoverChanged: updateBubble()
+    onPinInfoChanged: updateBubble()
+    Connections { target: orbArea; function onContainsMouseChanged() { win.updateBubble() } }
     // The orb only exists together with the bubble (or the chat strip) — never on a bare desktop.
     readonly property bool orbVisible: chat || showBubble
     // How far the shape has grown out of the sliver (0..1). Drives what may be visible:
@@ -78,6 +89,7 @@ Window {
     onMenuOpenChanged: {
         if (menuOpen) { menuPage = "main"; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
         else if (chat) bridge.raiseTerminal()
+        updateBubble()
     }
     Connections { target: bridge; function onMenuRequested() { win.menuOpen = !win.menuOpen } }
 
@@ -126,7 +138,7 @@ Window {
         return h > 0 ? (h + " h " + m + " m") : (Math.max(1, m) + " min")
     }
 
-    Component.onCompleted: { visible = true; bridge.applyMask(hotRects) }
+    Component.onCompleted: { visible = true; updateBubble(); bridge.applyMask(hotRects) }
     Timer { interval: 30000; running: true; repeat: true; onTriggered: win.now = Date.now() / 1000 }
 
     // ── the starburst: the real mark if the installer extracted one from a locally
@@ -517,8 +529,9 @@ Window {
         radius: 16
         color: pal.background
         border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
-        x: win.width - width - 10
-        y: Math.max(8, orb.targetCy - orb.r - 10 - height)
+        // beside the bubble (or the chat strip), never over it
+        x: win.width - width - (win.chat ? win.stripW : win.bubbleW) - 12
+        y: Math.max(8, orb.targetCy + orb.r + 6 - height)
         opacity: win.menuOpen ? 1 : 0
         visible: opacity > 0.01
         transform: Translate { y: win.menuOpen ? 0 : 8

@@ -34,10 +34,11 @@ case "${1:-toggle}" in
   stop)    stop ;;
   restart) stop; start "${@:2}" ;;
   status)  if running; then echo "running"; else echo "stopped"; exit 1; fi ;;
+  state)   qdbus6 "$SVC" "$OBJ" "$SVC.state" ;;
   -h|--help|help)
            sed -n '2p' "$0"; echo "  claude-notch start [-v]   start the notch (autostart does this at login)"
            echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
            echo "  claude-notch menu         open the orb menu"
-           echo "  claude-notch status | stop | restart" ;;
+           echo "  claude-notch status | state | stop | restart" ;;
   *)       echo "claude-notch: unknown command '$1'" >&2; exit 2 ;;
 esac
