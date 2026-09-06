@@ -104,7 +104,10 @@ Window {
             r.push([W - hw, (H - hh) / 2, hw, hh])
         } else r.push([W - lay.sliver_hot, (H - sliverH - 28) / 2, lay.sliver_hot, sliverH + 28])
         if (orbVisible) r.push([orb.targetCx - 18, orb.targetCy - 18, 36, 36])
-        if (menuOpen) r.push([menu.x - 6, menu.y - 6, menu.width + 12, (orb.targetCy + 22) - menu.y + 6])   // down to the orb, no gap
+        if (menuOpen) {          // one convex region: menu + bubble/strip + orb, so no path between them leaves the window
+            var top = Math.min(menu.y - 6, r[0][1]), bottom = Math.max(orb.targetCy + 22, r[0][1] + r[0][3])
+            r = [[menu.x - 6, top, W - (menu.x - 6), bottom - top]]
+        }
         return r
     }
     onHotRectsChanged: bridge.applyMask(hotRects)
@@ -378,11 +381,12 @@ Window {
 
     // ── input over the shape ─────────────────────────────────────────
     MouseArea {
+        id: mainArea
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         onEntered: { if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true; bridge.reload() }
-        onExited:  { win.hover = false; win.suppressHover = false; win.menuOpen = false; win.pinInfo = false }
+        onExited:  { win.hover = false; win.suppressHover = false }
         onPositionChanged: if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true
         onClicked: {
             if (win.menuOpen) { win.menuOpen = false; return }
@@ -401,11 +405,11 @@ Window {
         readonly property real targetCx: win.chat ? win.width - win.stripW / 2
                                         : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
         readonly property real targetCy: win.chat ? win.height - win.chatInset - 30
-                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 24
+                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 10
         // drawn position — follows the animated shape
         property real cx: win.chatVisual ? win.width - win.stripW / 2
                                          : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
-        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 24
+        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 10
         Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
 
         x: cx - r - 4; y: cy - r - 4
@@ -437,9 +441,9 @@ Window {
                 } else {                                    // resting arc
                     ctx.lineCap = "round"
                     ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 7
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 3, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
+                    ctx.beginPath(); ctx.arc(cx - 6, cy + 6, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
                     ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.2
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 3, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
+                    ctx.beginPath(); ctx.arc(cx - 6, cy + 6, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
                 }
             }
         }
@@ -452,6 +456,13 @@ Window {
             onTapped: win.menuOpen = !win.menuOpen
         }
     }
+
+    // The menu (and pinned details) close when nothing is under the pointer any
+    // more — the main area, the orb or the menu — after a short debounce that
+    // bridges the hand-over between them.
+    readonly property bool pointerInside: mainArea.containsMouse || orbHover.hovered || menuHover.hovered
+    onPointerInsideChanged: if (pointerInside) leaveTimer.stop(); else leaveTimer.restart()
+    Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.pinInfo = false } }
 
     // ── the menu ─────────────────────────────────────────────────────
     function menuItems(page) {
@@ -519,6 +530,7 @@ Window {
         transform: Translate { y: win.menuOpen ? 0 : 8
                                Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutQuint } } }
         Behavior on opacity { NumberAnimation { duration: 120 } }
+        HoverHandler { id: menuHover }
 
         Column {
             id: menuCol
