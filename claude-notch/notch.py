@@ -415,7 +415,9 @@ class Bridge(QObject):
     def state(self) -> str:
         """UI state as JSON — `claude-notch state`; handy when reporting bugs."""
         return json.dumps({"chat": self._chat, "workdir": str(self._workdir),
-                           "terminal": self._terminal_running(), **getattr(self, "_ui_state", {})})
+                           "terminal": self._terminal_running(),
+                           "mask": getattr(self, "_mask_rects", None),
+                           **getattr(self, "_ui_state", {})})
 
     @Slot()
     def menu(self) -> None:
@@ -667,8 +669,10 @@ class Bridge(QObject):
             self._pending_rects = list(rects)
             return
         region = QRegion()
+        self._mask_rects = []
         for r in rects:
             x, y, w, h = (int(v) for v in r)
+            self._mask_rects.append([x, y, w, h])
             region = region.united(QRegion(x, y, max(1, w), max(1, h)))
         self._window.setMask(region)
 

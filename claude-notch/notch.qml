@@ -72,14 +72,14 @@ Window {
     // menuOpen as a dependency until some earlier operand had changed.
     property bool showBubble: false
     function updateBubble() {
-        showBubble = !chat && (menuOpen || hover || pinInfo || orbArea.containsMouse)
+        showBubble = !chat && (menuOpen || hover || pinInfo || orbHover.hovered)
         bridge.reportState({ chat: chat, chatVisual: chatVisual, hover: hover, menuOpen: menuOpen,
-                             pinInfo: pinInfo, showBubble: showBubble, orbHover: orbArea.containsMouse,
+                             pinInfo: pinInfo, showBubble: showBubble, orbHover: orbHover.hovered,
                              menuPage: menuPage })
     }
     onHoverChanged: updateBubble()
     onPinInfoChanged: updateBubble()
-    Connections { target: orbArea; function onContainsMouseChanged() { win.updateBubble() } }
+    Connections { target: orbHover; function onHoveredChanged() { win.updateBubble() } }
     // The orb only exists together with the bubble (or the chat strip) — never on a bare desktop.
     readonly property bool orbVisible: chat || showBubble
     // How far the shape has grown out of the sliver (0..1). Drives what may be visible:
@@ -382,7 +382,7 @@ Window {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         onEntered: { if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true; bridge.reload() }
-        onExited:  { win.hover = false; win.suppressHover = false }
+        onExited:  { win.hover = false; win.suppressHover = false; win.menuOpen = false; win.pinInfo = false }
         onPositionChanged: if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true
         onClicked: {
             if (win.menuOpen) { win.menuOpen = false; return }
@@ -413,7 +413,7 @@ Window {
         opacity: win.orbVisible ? 1 : 0
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 140 } }
-        property bool hot: orbArea.containsMouse || win.menuOpen
+        property bool hot: orbHover.hovered || win.menuOpen
 
         Canvas {
             id: orbCv
@@ -446,29 +446,11 @@ Window {
         onHotChanged: orbCv.requestPaint()
         Connections { target: win; function onStaleChanged() { orbCv.requestPaint() } }
 
-        MouseArea {
-            id: orbArea
-            anchors.fill: parent
-            hoverEnabled: true
-            onClicked: win.menuOpen = !win.menuOpen
+        HoverHandler { id: orbHover }
+        TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds     // exclusive grab: the main area must not see this click
+            onTapped: win.menuOpen = !win.menuOpen
         }
-    }
-
-    // A cooperative hover handler sees the pointer anywhere in the window, even
-    // over MouseAreas that took hover from the big one. The menu closes only
-    // when the pointer has really left the window for a moment.
-    Item {
-        anchors.fill: parent
-        z: 1000
-        HoverHandler {
-            id: winHover
-            onHoveredChanged: if (hovered) leaveTimer.stop(); else leaveTimer.restart()
-        }
-    }
-    Timer {
-        id: leaveTimer
-        interval: 280
-        onTriggered: if (!winHover.hovered) { win.menuOpen = false; win.pinInfo = false }
     }
 
     // ── the menu ─────────────────────────────────────────────────────
@@ -554,7 +536,8 @@ Window {
                         visible: modelData.sep === true
                         anchors.centerIn: parent; width: parent.width - 16; height: 1; color: Qt.rgba(1, 1, 1, 0.08)
                     }
-                    readonly property bool hot: itemArea.containsMouse && modelData.sep !== true && modelData.info !== true
+                    readonly property bool active: modelData.sep !== true && modelData.info !== true
+                    readonly property bool hot: itemHover.hovered && active
                     Rectangle {      // hover highlight
                         anchors.fill: parent; radius: 10
                         color: "#ffffff"; opacity: parent.hot ? 0.16 : 0
@@ -584,12 +567,11 @@ Window {
                         color: typeof modelData.sub === "string" ? "#8e8e93" : win.colorFor(30)
                         font.pixelSize: 13; font.bold: true
                     }
-                    MouseArea {
-                        id: itemArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        enabled: modelData.sep !== true && modelData.info !== true
-                        onClicked: {
+                    HoverHandler { id: itemHover; enabled: parent.active }
+                    TapHandler {
+                        enabled: parent.active
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: {
                             if (modelData.back === true) { win.menuPage = "main"; return }
                             if (typeof modelData.sub === "string") { win.menuPage = modelData.sub; return }
                             if (typeof modelData.a === "function") modelData.a()
