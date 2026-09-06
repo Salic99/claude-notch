@@ -31,6 +31,7 @@ case "${1:-toggle}" in
   toggle|show|hide|menu|details)
            running || start
            call "$1" ;;
+  reload)  running && call reloadConfig || start ;;
   stop)    stop ;;
   restart) stop; start "${@:2}" ;;
   status)  if running; then echo "running"; else echo "stopped"; exit 1; fi ;;

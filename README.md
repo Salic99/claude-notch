@@ -58,6 +58,7 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | `claude-notch toggle` | the same, for shortcuts and scripts |
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
+| `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
 
 The chat is a normal terminal window (`alacritty` with the shipped theme) running `claude` in `~/Projects`, dropping to your shell when the agent exits so the panel never closes under you. It keeps its session while folded — folding hides the window, it does not kill it.
 
@@ -76,7 +77,7 @@ Below the notch sits a small arc — the **orb**. Hover it and it becomes a gear
 | **Settings ›** | **Monitor** (lists your outputs), **Panel width**, **Start at login**, **Language**, plus *Edit config file* and *View log* |
 | **Restart notch** / **Quit** | |
 
-Settings that change the layout are written to `config.toml` (comments preserved) and the notch restarts itself in place — the chat's terminal is a separate process and keeps its session.
+Settings that change the layout are written to `config.toml` (comments preserved) and applied **live** — monitor, panel width and language take effect without restarting; the chat's terminal keeps its session. After editing `config.toml` by hand, `claude-notch reload` (or the menu) re-reads it.
 
 ## Configure
 
@@ -125,7 +126,7 @@ The UI language follows your desktop locale (English, Czech). `claude-notch rest
 - **The sliver appears on the wrong monitor.** Set `[screen].name` to the output (`kscreen-doctor -o` lists them). "auto" follows KDE's *primary* (priority 1), which is what System Settings shows — Qt's own notion of primary often differs.
 - **Clicking does nothing / the terminal never appears.** Check `~/.cache/claude-notch.log` and run `claude-notch restart`. `[terminal].launch` must point at an installed terminal; the agent must be on `PATH`.
 - **The shortcut does nothing.** KWin reads shortcut configuration at login — log out and back in.
-- **The notch is missing after resuming from sleep or replugging monitors.** `claude-notch restart` re-reads screen geometry.
+- **The notch is missing after resuming from sleep or replugging monitors.** `claude-notch reload` re-reads screen geometry.
 
 ## Uninstall
 

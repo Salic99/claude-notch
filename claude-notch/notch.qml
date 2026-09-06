@@ -13,7 +13,7 @@ Window {
     // ── layout & colours come from Python (config.toml) ─────────────
     readonly property var lay: cfg.layout
     readonly property var pal: cfg.colors
-    readonly property int fullW:   lay.width
+    readonly property int fullW:   bridge.panelWidth      // live: menu > width
     readonly property int stripW:  lay.strip
     readonly property int bubbleW: lay.bubble_w
     readonly property int bubbleH: lay.bubble_h
@@ -45,7 +45,7 @@ Window {
               autostart: "Spouštět po přihlášení", language: "Jazyk", editConfig: "Upravit konfiguraci",
               log: "Zobrazit log", about: "O aplikaci", back: "Zpět", halfScreen: "Polovina obrazovky",
               langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu" }
-    })[cfg.ui.language] || ({})
+    })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
     readonly property bool chat: bridge.chatOpen

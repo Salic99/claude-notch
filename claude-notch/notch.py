@@ -82,6 +82,11 @@ VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
 def log(msg: str) -> None:
     if VERBOSE:
         print(f"[claude-notch] {msg}", file=sys.stderr, flush=True)
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
 
 
 def warn(msg: str) -> None:
@@ -320,6 +325,7 @@ class Bridge(QObject):
     usageChanged = Signal()
     chatOpenChanged = Signal()
     settingsChanged = Signal()
+    geomChanged = Signal()
     menuRequested = Signal()
     detailsRequested = Signal()
 
@@ -330,6 +336,7 @@ class Bridge(QObject):
         self.T = cfg["timing"]
         self._usage = self._empty()
         self._window = None
+        self._engine = None
         self._pending_rects = None
         self._chat = False
         self._proc: subprocess.Popen | None = None
@@ -378,9 +385,13 @@ class Bridge(QObject):
     def chatOpen(self):
         return self._chat
 
-    @Property(int, constant=True)
+    @Property(int, notify=geomChanged)
     def winH(self):
         return self._win_h
+
+    @Property(str, notify=settingsChanged)
+    def lang(self):
+        return self.cfg["ui"]["language"]
 
     @Slot()
     def toggle(self) -> None:
@@ -417,6 +428,8 @@ class Bridge(QObject):
         """UI state as JSON — `claude-notch state`; handy when reporting bugs."""
         return json.dumps({"chat": self._chat, "workdir": str(self._workdir),
                            "terminal": self._terminal_running(),
+                           "screen": self.cfg["screen"]["name"], "lang": self.cfg["ui"]["language"],
+                           "geo": list(self._geo), "width": int(self.L["width"]),
                            "mask": getattr(self, "_mask_rects", None),
                            **getattr(self, "_ui_state", {})})
 
@@ -591,15 +604,15 @@ class Bridge(QObject):
 
     @Slot(str)
     def setScreen(self, name: str) -> None:
-        set_config("screen", "name", name); self.restart()
+        set_config("screen", "name", name); self.reloadConfig()
 
-    @Property(int, notify=settingsChanged)
+    @Property(int, notify=geomChanged)
     def panelWidth(self):
         return int(self.L["width"])
 
     @Slot(int)
     def setWidth(self, px: int) -> None:
-        set_config("layout", "width", int(px)); self.restart()
+        set_config("layout", "width", int(px)); self.reloadConfig()
 
     @Property(bool, notify=settingsChanged)
     def autostart(self):
@@ -624,7 +637,7 @@ class Bridge(QObject):
 
     @Slot(str)
     def setLanguage(self, code: str) -> None:
-        set_config("ui", "language", code); self.restart()
+        set_config("ui", "language", code); self.reloadConfig()
 
     @Slot()
     def openConfig(self) -> None:
@@ -646,10 +659,36 @@ class Bridge(QObject):
         return __version__
 
     @Slot()
-    def restart(self) -> None:
-        """Replace the process in place: the D-Bus name is released with the old
-        image, the terminal (a separate process) keeps its session."""
-        QTimer.singleShot(0, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+    def reloadConfig(self) -> None:
+        """Re-read config.toml and apply it live: geometry, colours, language,
+        layout — no process restart (execv races the Wayland window and the
+        D-Bus name). Also the target of `claude-notch reload` / the menu's
+        Reload item, e.g. after editing the file by hand."""
+        cfg = load_config()
+        self.cfg = cfg
+        self.L = cfg["layout"]
+        self.T = cfg["timing"]
+        self._geo = primary_geometry(cfg["screen"]["name"])
+        self._win_h = int(self._geo[3] * cfg["screen"]["height_ratio"])
+        self._workdir = self._resolve_workdir(cfg["agent"]["workdir"])
+        self._data_timer.start(int(self.T["data_refresh_ms"]))
+        # push the fresh cfg into QML (layout/colours/timing read from it directly)
+        if self._engine is not None:
+            self._engine.rootContext().setContextProperty("cfg", cfg)
+        self.geomChanged.emit()
+        self.settingsChanged.emit()
+        self.pin()
+        if self._chat:
+            x, y, w, h = self._terminal_rect()
+            place(TERM_CLASS, x, y, w, h, raise_it=True)
+
+    @Slot()
+    def reload(self) -> None:
+        self.reloadConfig()
+
+    @Slot()
+    def restart(self) -> None:      # alias kept for the menu and older callers
+        self.reloadConfig()
 
     @staticmethod
     def _notify(title: str, body: str) -> None:
@@ -657,15 +696,17 @@ class Bridge(QObject):
             subprocess.Popen(["notify-send", "-a", "Claude Notch", "-i", "dialog-warning", title, body])
 
     # ── own window ──────────────────────────────────────────────────────
-    def attach_window(self, w) -> None:
+    def attach_window(self, w, engine=None) -> None:
         self._window = w
+        self._engine = engine
         if self._pending_rects is not None:
             self.applyMask(self._pending_rects)
 
     def pin(self) -> None:
         gx, gy, gw, gh = self._geo
-        place(APP_ID, gx + gw - self.L["width"], gy + (gh - self._win_h) // 2,
-              self.L["width"], self._win_h)
+        x, y = gx + gw - self.L["width"], gy + (gh - self._win_h) // 2
+        log(f"pin -> {x},{y} {self.L['width']}x{self._win_h}  (geo={self._geo})")
+        place(APP_ID, x, y, self.L["width"], self._win_h)
 
     @Slot("QVariantList")
     def applyMask(self, rects) -> None:
@@ -710,7 +751,7 @@ def main() -> int:
     if not engine.rootObjects():
         warn("failed to load notch.qml")
         return 1
-    bridge.attach_window(engine.rootObjects()[0])
+    bridge.attach_window(engine.rootObjects()[0], engine)
 
     # The compositor decides where a Wayland window goes; pin it (twice, in
     # case the first placement races the window mapping).
