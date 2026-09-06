@@ -404,16 +404,16 @@ Window {
     // ── the orb: an arc below the notch; a gear on hover; click → menu ──
     Item {
         id: orb
-        readonly property int r: 14
+        readonly property int r: 18
         // target (state) position — used for the input mask and the menu anchor
         readonly property real targetCx: win.chat ? win.width - win.stripW / 2
-                                        : (win.showBubble ? win.width - 19 : win.width - 16)
+                                        : (win.showBubble ? win.width - win.bubbleW / 2 - 6 : win.width - 16)
         readonly property real targetCy: win.chat ? win.height - win.chatInset - 30
-                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 26
+                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 30
         // drawn position — follows the animated shape
         property real cx: win.chatVisual ? win.width - win.stripW / 2
-                                         : (win.showBubble ? win.width - 19 : win.width - 16)
-        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 26
+                                         : (win.showBubble ? win.width - win.bubbleW / 2 - 6 : win.width - 16)
+        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 30
         Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
 
         x: cx - r - 4; y: cy - r - 4
@@ -444,10 +444,10 @@ Window {
                     }
                 } else {                                    // resting arc
                     ctx.lineCap = "round"
-                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 7
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 4, R - 1, -Math.PI * 0.5, Math.PI * 0.15); ctx.stroke()   // ╮ hook under the inverted corner, bending into the edge
-                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.2
-                    ctx.beginPath(); ctx.arc(cx - 6, cy + 4, R - 1, -Math.PI * 0.5, Math.PI * 0.15); ctx.stroke()   // ╮ hook under the inverted corner, bending into the edge
+                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 8.5
+                    ctx.beginPath(); ctx.arc(cx - 5, cy + 7, R - 2, -Math.PI * 0.55, Math.PI * 0.02); ctx.stroke()   // ╮ quarter hook under the bubble, ending straight down
+                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 5.2
+                    ctx.beginPath(); ctx.arc(cx - 5, cy + 7, R - 2, -Math.PI * 0.55, Math.PI * 0.02); ctx.stroke()   // ╮ quarter hook under the bubble, ending straight down
                 }
             }
         }
