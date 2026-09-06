@@ -32,7 +32,7 @@ except ModuleNotFoundError:          # Python < 3.11
 
 from PySide6.QtCore import ClassInfo, Property, QLocale, QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtDBus import QDBusConnection
-from PySide6.QtGui import QGuiApplication, QRegion
+from PySide6.QtGui import QGuiApplication, QImage, QRegion
 from PySide6.QtQml import QQmlApplicationEngine
 
 __version__ = "0.1.0"
@@ -456,9 +456,7 @@ class Bridge(QObject):
         hide_window(TERM_CLASS)
 
     @Slot()
-    def quit(self) -> None:
-        self._kill_terminal()
-        self._kill_session()
+    def quit(self) -> None:          # the chat (terminal + tmux session) outlives the notch
         QGuiApplication.quit()
 
     # ── the "+" bar under the chat ───────────────────────────────────────
@@ -499,6 +497,47 @@ class Bridge(QObject):
     def sendCommand(self, cmd: str) -> None:
         if self._type(cmd, enter=True):
             raise_window(TERM_CLASS)
+
+    @Slot(str)
+    def add(self, items: str) -> None:
+        """Mention files in the chat: newline-separated paths or file:// URLs
+        (drag-and-drop from QML, `claude-notch add <file>...` from the shell)."""
+        paths = []
+        for it in items.splitlines():
+            it = it.strip()
+            if not it:
+                continue
+            u = QUrl(it)
+            p = u.toLocalFile() if u.isLocalFile() else it
+            p = os.path.abspath(os.path.expanduser(p))
+            paths.append(p.rstrip("/") + "/" if os.path.isdir(p) else p)
+        self._mention(paths)
+
+    @Slot()
+    def pasteImage(self) -> None:
+        """Save the image on the clipboard to a file and mention it."""
+        out = CACHE_DIR / "claude-notch" / "clips"
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / time.strftime("clip-%Y%m%d-%H%M%S.png")
+        ok = False
+        if shutil.which("wl-paste"):            # reads the clipboard without owning focus
+            r = subprocess.run(["wl-paste", "--list-types"], capture_output=True, text=True)
+            types = [t for t in r.stdout.split() if t.startswith("image/")]
+            if types:
+                mime = "image/png" if "image/png" in types else types[0]
+                with open(path, "wb") as f:
+                    ok = subprocess.run(["wl-paste", "-t", mime], stdout=f).returncode == 0
+                if ok and mime != "image/png":
+                    img = QImage(str(path)); ok = not img.isNull() and img.save(str(path), "PNG")
+        if not ok:                              # Qt: works when the notch has been focused recently
+            img = QGuiApplication.clipboard().image()
+            ok = not img.isNull() and img.save(str(path), "PNG")
+        if not ok:
+            path.unlink(missing_ok=True)
+            self._notify("Claude Notch", "No image on the clipboard." + ("" if shutil.which("wl-paste") else
+                         " Install wl-clipboard for reliable clipboard access."))
+            return
+        self._mention([str(path)])
 
     @Slot("QVariant")
     def reportState(self, st) -> None:

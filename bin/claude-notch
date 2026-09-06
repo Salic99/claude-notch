@@ -36,11 +36,15 @@ case "${1:-toggle}" in
   restart) stop; start "${@:2}" ;;
   status)  if running; then echo "running"; else echo "stopped"; exit 1; fi ;;
   state)   qdbus6 "$SVC" "$OBJ" "$SVC.state" ;;
+  add)     running || { start; sleep 2; }
+           [[ $# -ge 2 ]] || { echo "usage: claude-notch add <file>..." >&2; exit 2; }
+           qdbus6 "$SVC" "$OBJ" "$SVC.add" "$(for f in "${@:2}"; do realpath -m -- "$f"; done)" ;;
   -h|--help|help)
            sed -n '2p' "$0"; echo "  claude-notch start [-v]   start the notch (autostart does this at login)"
            echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
            echo "  claude-notch menu         open the orb menu"; echo "  claude-notch plus         open the + popup (files, folder, connectors, plugins)"
            echo "  claude-notch details      pin the usage bubble"
+           echo "  claude-notch add <file>…  mention files in the chat (opens it if needed)"
            echo "  claude-notch status | state | stop | restart" ;;
   *)       echo "claude-notch: unknown command '$1'" >&2; exit 2 ;;
 esac

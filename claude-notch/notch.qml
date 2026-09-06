@@ -38,7 +38,8 @@ Window {
               log: "View log", about: "About", back: "Back", halfScreen: "Half of the screen",
               langSystem: "System", version: "Version", repo: "Project page",
               addFiles: "Add files or photos", addFolder: "Add folder", connectors: "Connectors",
-              plugins: "Plugins", plusHint: "Add to the conversation" },
+              plugins: "Plugins", plusHint: "Add to the conversation", pasteImage: "Paste image from clipboard",
+              dropHint: "Drop to add to the conversation" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -49,7 +50,8 @@ Window {
               log: "Zobrazit log", about: "O aplikaci", back: "Zpět", halfScreen: "Polovina obrazovky",
               langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu",
               addFiles: "Přidat soubory nebo fotky", addFolder: "Přidat složku", connectors: "Konektory",
-              plugins: "Pluginy", plusHint: "Přidat do konverzace" }
+              plugins: "Pluginy", plusHint: "Přidat do konverzace", pasteImage: "Vložit obrázek ze schránky",
+              dropHint: "Pusť a přidá se do konverzace" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -737,6 +739,16 @@ Window {
         }
     }
 
+    // Files dragged onto the panel (the + bar or the strip) become @mentions.
+    DropArea {
+        id: drop
+        anchors.fill: parent
+        enabled: win.chat
+        keys: ["text/uri-list"]
+        onEntered: (d) => { if (!d.hasUrls) d.accepted = false }
+        onDropped: (d) => { if (d.hasUrls) { bridge.add(d.urls.join("\n")); d.accept() } }
+    }
+
     // ── the "+" bar under the chat terminal: files, folder, connectors, plugins ──
     Item {
         id: plusBar
@@ -752,7 +764,7 @@ Window {
             id: plusBtn
             x: 8; anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 28; radius: 14
-            color: Qt.rgba(1, 1, 1, plusHover.hovered || win.plusOpen ? 0.18 : 0.09)
+            color: Qt.rgba(1, 1, 1, plusHover.hovered || win.plusOpen || drop.containsDrag ? 0.18 : 0.09)
             border.color: Qt.rgba(1, 1, 1, 0.12); border.width: 1
             Behavior on color { ColorAnimation { duration: 90 } }
             Text {           // the + turns into an × while the popup is up
@@ -765,8 +777,9 @@ Window {
         Text {
             anchors.left: plusBtn.right; anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
-            text: win.txt.plusHint || ""; color: "#7a7a80"; font.pixelSize: 12
-            opacity: plusHover.hovered && !win.plusOpen ? 1 : 0
+            text: (drop.containsDrag ? win.txt.dropHint : win.txt.plusHint) || ""
+            color: drop.containsDrag ? "#ebebf0" : "#7a7a80"; font.pixelSize: 12
+            opacity: (plusHover.hovered && !win.plusOpen) || drop.containsDrag ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 120 } }
         }
         Item {
@@ -800,6 +813,7 @@ Window {
                 model: [
                     { l: win.txt.addFiles,   a: function() { bridge.addFiles() } },
                     { l: win.txt.addFolder,  a: function() { bridge.addFolder() } },
+                    { l: win.txt.pasteImage, a: function() { bridge.pasteImage() } },
                     { l: win.txt.connectors, a: function() { bridge.sendCommand("/mcp") } },
                     { l: win.txt.plugins,    a: function() { bridge.sendCommand("/plugin") } }
                 ]

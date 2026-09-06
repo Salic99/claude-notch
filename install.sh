@@ -3,7 +3,7 @@
 # (optionally) the status line feed, the Plasma widget and the crash-to-agent extra.
 #
 #   ./install.sh [--with-statusline] [--with-plasmoid] [--with-crash-agent]
-#                [--shortcut "Meta+Ctrl+Shift+A"] [--no-autostart] [--start]
+#                [--shortcut "Meta+Ctrl+Shift+A"] [--plus-shortcut "Meta+Shift+A"] [--no-autostart] [--start]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -12,13 +12,14 @@ CONF="${XDG_CONFIG_HOME:-$HOME/.config}"
 BIN="$HOME/.local/bin"
 APPDIR="$DATA/claude-notch"
 
-WITH_STATUSLINE=0 WITH_PLASMOID=0 WITH_CRASH=0 AUTOSTART=1 START=0 SHORTCUT=""
+WITH_STATUSLINE=0 WITH_PLASMOID=0 WITH_CRASH=0 AUTOSTART=1 START=0 SHORTCUT="" PLUS_SHORTCUT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-statusline) WITH_STATUSLINE=1 ;;
     --with-plasmoid)   WITH_PLASMOID=1 ;;
     --with-crash-agent) WITH_CRASH=1 ;;
     --shortcut)        SHORTCUT="${2:?}"; shift ;;
+    --plus-shortcut)   PLUS_SHORTCUT="${2:?}"; shift ;;
     --no-autostart)    AUTOSTART=0 ;;
     --start)           START=1 ;;
     -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
@@ -43,6 +44,7 @@ for c in qdbus6 kscreen-doctor jq; do command -v "$c" >/dev/null && ok "$c" || d
 command -v alacritty >/dev/null && ok "alacritty" || warn "alacritty not found — set [terminal].launch in $CONF/claude-notch/config.toml"
 command -v claude >/dev/null && ok "claude" || warn "claude not on PATH — set [agent].command if your agent is called differently"
 command -v tmux >/dev/null && ok "tmux" || warn "tmux not found — the chat's + bar (files, folders, /mcp, /plugin) needs it: sudo pacman -S tmux"
+command -v wl-paste >/dev/null && ok "wl-clipboard" || warn "wl-clipboard not found — 'Paste image from clipboard' needs it: sudo pacman -S wl-clipboard"
 
 echo "Installing files"
 mkdir -p "$APPDIR" "$BIN" "$CONF/claude-notch" "$CONF/autostart" "$DATA/applications"
@@ -79,6 +81,11 @@ Icon=utilities-terminal
 Terminal=false
 Categories=Development;Utility;
 Keywords=ai;agent;claude;notch;
+Actions=Plus;
+
+[Desktop Action Plus]
+Name=Add to the chat
+Exec=$BIN/claude-notch plus
 DESK
 update-desktop-database "$DATA/applications" 2>/dev/null || true
 ok "application entry (Claude Notch → toggle)"
@@ -101,6 +108,11 @@ if [[ -n $SHORTCUT ]]; then
   kwriteconfig6 --file kglobalshortcutsrc --group services --group claude-notch.desktop \
     --key _launch "$SHORTCUT,none,Claude Notch"
   ok "shortcut $SHORTCUT → toggle (active after the next login)"
+fi
+if [[ -n ${PLUS_SHORTCUT:-} ]]; then
+  kwriteconfig6 --file kglobalshortcutsrc --group services --group claude-notch.desktop \
+    --key Plus "$PLUS_SHORTCUT,none,Add to the chat"
+  ok "shortcut $PLUS_SHORTCUT → + popup (active after the next login)"
 fi
 
 if (( WITH_STATUSLINE )); then

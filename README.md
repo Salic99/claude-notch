@@ -34,9 +34,10 @@ The numbers come from Claude Code itself. Claude Code hands its status line a JS
 - `qdbus6`, `kscreen-doctor`, `jq`
 - a terminal — **alacritty** by default; kitty/foot/others via `[terminal].launch`
 - **tmux** (optional) — for the + bar under the chat and sessions that survive the panel
+- **wl-clipboard** (optional) — for *Paste image from clipboard*
 - Claude Code with a plan that reports rate limits (Pro/Max); any other agent CLI works for the chat panel
 
-On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty tmux`
+On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty tmux wl-clipboard`
 
 ## Install
 
@@ -64,6 +65,8 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | click the side strip | fold it back |
 | `claude-notch toggle` | the same, for shortcuts and scripts |
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
+| the **+** under the terminal | files, folder, clipboard image, `/mcp`, `/plugin` (`claude-notch plus`) |
+| `claude-notch add <file>…` | mention files in the chat |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
 
@@ -79,10 +82,11 @@ Under the terminal sits a **+**. Click it (or run `claude-notch plus`) for:
 |---|---|
 | Add files or photos | a KDE file picker; each pick becomes an `@path` mention (images included) |
 | Add folder | a directory picker; `@folder/` |
+| Paste image from clipboard | saves the clipboard image under `~/.cache/claude-notch/clips/` and mentions it (needs `wl-clipboard`) |
 | Connectors | `/mcp` — Claude Code's MCP server dialog |
 | Plugins | `/plugin` — the plugin manager |
 
-Mentions are inserted without pressing Enter, so you can add your question after them.
+Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the + bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
 
 ## Live activity
 
