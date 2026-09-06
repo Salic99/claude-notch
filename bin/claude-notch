@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# claude-notch — control the notch:  start | toggle | show | hide | stop | status | restart
+set -euo pipefail
+APP="${XDG_DATA_HOME:-$HOME/.local/share}/claude-notch/notch.py"
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/claude-notch.log"
+SVC=org.claudenotch.Notch
+OBJ=/Notch
+
+running() { qdbus6 "$SVC" >/dev/null 2>&1; }
+call()    { qdbus6 "$SVC" "$OBJ" "$SVC.$1" >/dev/null 2>&1 || qdbus6 "$SVC" "$OBJ" "$1" >/dev/null 2>&1; }
+owner_pid() { qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$SVC" 2>/dev/null; }
+stop() {
+  running || return 0
+  call quit
+  for _ in $(seq 1 20); do running || return 0; sleep 0.1; done
+  local pid; pid=$(owner_pid); [[ -n $pid ]] && kill "$pid" 2>/dev/null   # an instance that will not answer
+  for _ in $(seq 1 20); do running || return 0; sleep 0.1; done
+  return 1
+}
+
+start() {
+  running && { echo "claude-notch: already running"; return 0; }
+  [[ -f $APP ]] || { echo "claude-notch: $APP not found — run install.sh" >&2; return 1; }
+  setsid python3 "$APP" "$@" >"$LOG" 2>&1 < /dev/null &
+  for _ in $(seq 1 40); do running && return 0; sleep 0.1; done
+  echo "claude-notch: failed to start, see $LOG" >&2; return 1
+}
+
+case "${1:-toggle}" in
+  start)   start "${@:2}" ;;
+  toggle|show|hide)
+           running || start
+           call "$1" ;;
+  stop)    stop ;;
+  restart) stop; start "${@:2}" ;;
+  status)  if running; then echo "running"; else echo "stopped"; exit 1; fi ;;
+  -h|--help|help)
+           sed -n '2p' "$0"; echo "  claude-notch start [-v]   start the notch (autostart does this at login)"
+           echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
+           echo "  claude-notch status | stop | restart" ;;
+  *)       echo "claude-notch: unknown command '$1'" >&2; exit 2 ;;
+esac

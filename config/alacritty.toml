@@ -1,0 +1,57 @@
+# Terminal theme for the Claude Notch chat panel. Colours match the notch.
+[general]
+live_config_reload = true
+
+[env]
+TERM = "xterm-256color"
+
+[window]
+decorations = "None"
+opacity = 1.0
+padding = { x = 16, y = 14 }
+dynamic_padding = false
+
+[scrolling]
+history = 50000
+multiplier = 3
+
+[font]
+normal = { family = "monospace", style = "Regular" }
+bold = { family = "monospace", style = "Bold" }
+italic = { family = "monospace", style = "Italic" }
+size = 11.0
+
+[cursor]
+style = { shape = "Beam", blinking = "On" }
+unfocused_hollow = true
+
+[selection]
+save_to_clipboard = true
+
+[colors.primary]
+background = "#0d0d0f"
+foreground = "#ebebf0"
+
+[colors.cursor]
+cursor = "#d97757"
+text = "#0d0d0f"
+
+[colors.normal]
+black   = "#2c2c2e"
+red     = "#ff453a"
+green   = "#32d74b"
+yellow  = "#ffd426"
+blue    = "#64aaff"
+magenta = "#bf8cff"
+cyan    = "#5ac8d7"
+white   = "#ebebf0"
+
+[colors.bright]
+black   = "#4a4a4e"
+red     = "#ff6961"
+green   = "#72c68a"
+yellow  = "#ffe066"
+blue    = "#8cc3ff"
+magenta = "#d2aaff"
+cyan    = "#82dce6"
+white   = "#ffffff"

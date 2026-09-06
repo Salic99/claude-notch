@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# crash-watch — watches systemd-coredump and offers to hand each crash to your agent.
+# Runs as a user service (see crash-watch.service). Needs: journalctl, jq, notify-send.
+export LC_ALL=C.UTF-8
+BRIEF="${XDG_DATA_HOME:-$HOME/.local/share}/claude-notch/crash-brief"
+journalctl -f -o json --since now MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1 2>/dev/null |
+while IFS= read -r line; do
+  COMM=$(jq -r '.COREDUMP_COMM // "?"'        <<<"$line" 2>/dev/null)
+  PID=$( jq -r '.COREDUMP_PID  // ""'         <<<"$line" 2>/dev/null)
+  SIG=$( jq -r '.COREDUMP_SIGNAL_NAME // "?"' <<<"$line" 2>/dev/null)
+  [ -z "$PID" ] && continue
+  (
+    ACT=$(notify-send --app-name="Crash watch" -u critical -i dialog-error \
+          -A "diagnose=Investigate with the agent" \
+          "Crashed: $COMM" "Signal $SIG · PID $PID")
+    [ "$ACT" = "diagnose" ] && setsid "$BRIEF" "$PID" "$COMM" >/dev/null 2>&1
+  ) &
+done

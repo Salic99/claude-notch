@@ -1,0 +1,19 @@
+# Claude Notch usage feed — source this from your Claude Code status line script.
+#
+#   input=$(cat)
+#   source ~/.local/share/claude-notch/usage-feed.sh   # writes the feed
+#   ... your own status line output ...
+#
+# It snapshots rate_limits / model / cost from the JSON Claude Code hands the
+# status line, plus a timestamp, into ~/.cache/claude-usage.json. The write is
+# atomic (temp file + rename) so readers never see a half-written file.
+claude_notch_feed() {
+  local out="${XDG_CACHE_HOME:-$HOME/.cache}/claude-usage.json" tmp
+  tmp=$(mktemp "${out}.XXXXXX") || return 0
+  if jq -c --argjson t "$(date +%s)" '{rate_limits, model, cost, _at: $t}' <<<"$1" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$out"
+  else
+    rm -f "$tmp"
+  fi
+}
+claude_notch_feed "$input"

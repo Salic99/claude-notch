@@ -1,0 +1,15 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Id": "org.claudenotch.usage",
+        "Name": "Claude Usage",
+        "Description": "Claude Code plan usage rings for the Plasma panel — companion widget of Claude Notch",
+        "Icon": "utilities-system-monitor",
+        "Version": "1.0.0",
+        "License": "MIT",
+        "Category": "System Information",
+        "Website": "https://github.com/Salic99/claude-notch",
+        "Authors": [{ "Name": "Filip Salamon" }]
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

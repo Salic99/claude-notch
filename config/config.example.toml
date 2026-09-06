@@ -1,0 +1,51 @@
+# Claude Notch configuration — copy to ~/.config/claude-notch/config.toml
+# Every key is optional; anything you leave out keeps the default shown here.
+
+[terminal]
+# Command used to open the chat panel. Placeholders:
+#   {theme}   path to the terminal theme shipped with Claude Notch
+#   {class}   Wayland app_id the notch uses to find and place the window
+#   {title}   window title
+#   {shell}   your login shell
+#   {command} the agent command, followed by a shell so the panel survives exit
+launch = "alacritty --config-file {theme} --class {class} -T {title} -e {shell} -c {command}"
+# Examples for other terminals:
+#   kitty:  "kitty --config {theme_kitty} --class {class} -T {title} {shell} -c {command}"
+#   foot:   "foot --app-id {class} -T {title} {shell} -c {command}"
+
+[agent]
+command = "claude"          # anything on PATH; e.g. "codex", "opencode"
+workdir = "~/Projects"      # where the agent starts
+keep_shell = true           # drop into a shell when the agent exits instead of closing the panel
+
+[screen]
+name = "auto"               # "auto" = KDE primary (priority 1), or an output name like "DP-2"
+height_ratio = 0.94         # panel height as a fraction of the screen
+
+[layout]
+width = 720                 # chat panel width (px)
+strip = 46                  # side strip with the usage ring when the chat is open
+pad = 10                    # inset of the terminal inside the rounded container
+inset = 26                  # vertical room for the inverted corners at the screen edge
+sliver_w = 5                # resting sliver width
+sliver_h = 132              # resting sliver height
+sliver_hot = 14             # how wide the hover zone is when resting
+bubble_w = 78
+bubble_h = 118
+panel_w = 300               # usage details panel shown on hover
+
+[timing]
+fade_ms = 130               # terminal fade-in; it is revealed the instant the container covers it
+collapse_delay_ms = 100     # on close: terminal fades out first, then the shape collapses
+stale_after_s = 1200        # dim the notch when the usage feed is older than this
+data_refresh_ms = 15000
+
+[colors]
+background = "#0d0d0f"
+ok = "#32d74b"              # < 50 % used
+warn = "#ffd426"            # < 80 % used
+crit = "#ff453a"
+none = "#6b6b6b"            # no data
+
+[ui]
+language = "auto"           # "auto" (from $LANG), "en" or "cs"

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# crash-brief — collects everything about a crash and opens the agent on it.
+set -uo pipefail
+export LC_ALL=C.UTF-8
+PID="${1:-}"; COMM="${2:-unknown}"
+AGENT="${CRASH_AGENT:-claude}"
+TERM_APP="${TERMINAL:-alacritty}"
+OUT=$(mktemp "${TMPDIR:-/tmp}/crash-${COMM}-XXXXXX.txt")
+
+pkg_of() {   # which package owns a binary — Arch, Debian/Ubuntu, Fedora/openSUSE
+  if command -v pacman >/dev/null; then pacman -Qo "$1" 2>&1; PKG=$(pacman -Qoq "$1" 2>/dev/null) && pacman -Qi "$PKG" 2>/dev/null | head -6
+  elif command -v dpkg  >/dev/null; then dpkg -S "$1" 2>&1; PKG=$(dpkg -S "$1" 2>/dev/null | cut -d: -f1) && dpkg -s "$PKG" 2>/dev/null | head -8
+  elif command -v rpm   >/dev/null; then rpm -qf "$1" 2>&1; PKG=$(rpm -qf "$1" 2>/dev/null) && rpm -qi "$PKG" 2>/dev/null | head -8
+  else echo "(no known package manager)"; fi
+}
+
+{
+  echo "=== CRASH: $COMM (PID $PID) ==="
+  echo; echo "--- coredumpctl info ---"
+  timeout 20 coredumpctl info "$PID" 2>&1
+  echo; echo "--- package ---"
+  BIN=$(timeout 10 coredumpctl info "$PID" 2>/dev/null | awk -F': +' '/Executable:/{print $2; exit}')
+  [ -n "${BIN:-}" ] && pkg_of "$BIN"
+  echo; echo "--- previous crashes of this process ---"
+  timeout 10 coredumpctl list "$COMM" --no-pager 2>&1 | tail -6
+  echo; echo "--- journal around the crash ---"
+  timeout 10 journalctl -b --since "3 min ago" -p warning --no-pager 2>&1 | tail -25
+} > "$OUT" 2>&1
+
+PROMPT="Use the diagnose-crash skill. The process '$COMM' crashed. The full report is in $OUT — read it and diagnose."
+exec "$TERM_APP" -T "Crash diagnosis — $COMM" -e "$AGENT" "$PROMPT"
