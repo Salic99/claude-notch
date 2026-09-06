@@ -54,18 +54,22 @@ TERM_CLASS = "claude-notch-terminal"        # app_id of the chat terminal
 WINDOW_CLASS = "claude-notch-window"        # app_id of a free-standing agent window
 DBUS_SERVICE = "org.claudenotch.Notch"
 DBUS_PATH = "/Notch"
+TMUX_SOCKET = "claude-notch"                # own tmux server, apart from the user's sessions
+TMUX_SESSION = "chat"
+TMUX_CONF = CONFIG_DIR / "tmux.conf"
 
 DEFAULTS = {
     "terminal": {
         "launch": "alacritty --config-file {theme} --class {class} -T {title} -e {shell} -c {command}",
         "theme": str(CONFIG_DIR / "alacritty.toml"),
     },
-    "agent": {"command": "claude", "workdir": "~/Projects", "keep_shell": True},
+    "agent": {"command": "claude", "workdir": "~/Projects", "keep_shell": True,
+              "tmux": True},        # run the agent inside tmux so the + bar can type into it
     "screen": {"name": "auto", "height_ratio": 0.94},
     "layout": {
         "width": 720, "strip": 46, "pad": 10, "inset": 26,
         "sliver_w": 5, "sliver_h": 132, "sliver_hot": 14,
-        "bubble_w": 78, "bubble_h": 118, "panel_w": 300,
+        "bubble_w": 78, "bubble_h": 118, "panel_w": 300, "bar": 40,
     },
     "timing": {
         "fade_ms": 130, "collapse_delay_ms": 100,
@@ -329,6 +333,7 @@ class Bridge(QObject):
     geomChanged = Signal()
     activityChanged = Signal()
     menuRequested = Signal()
+    plusRequested = Signal()
     detailsRequested = Signal()
 
     def __init__(self, cfg: dict):
@@ -452,7 +457,48 @@ class Bridge(QObject):
 
     @Slot()
     def quit(self) -> None:
+        self._kill_terminal()
+        self._kill_session()
         QGuiApplication.quit()
+
+    # ── the "+" bar under the chat ───────────────────────────────────────
+    @Slot()
+    def plus(self) -> None:
+        """Toggle the + popup (files, folder, connectors, plugins); opens the chat first."""
+        if not self._chat:
+            self.show()
+            QTimer.singleShot(600, self.plusRequested.emit)
+        else:
+            self.plusRequested.emit()
+
+    def _pick(self, args: list[str], then) -> None:
+        """Run a kdialog picker off the GUI thread, hand its lines to `then` on it."""
+        if shutil.which("kdialog") is None:
+            self._notify("Claude Notch", "kdialog is needed for the file picker.")
+            return
+        def worker():
+            r = subprocess.run(["kdialog", "--title", "Claude Notch", *args], capture_output=True, text=True)
+            lines = [ln for ln in r.stdout.splitlines() if ln.strip()] if r.returncode == 0 else []
+            QTimer.singleShot(0, lambda: then(lines))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _mention(self, paths: list[str]) -> None:
+        if paths and self._type("".join(f"@{p} " for p in paths)):
+            raise_window(TERM_CLASS)
+
+    @Slot()
+    def addFiles(self) -> None:
+        self._pick(["--multiple", "--separate-output", "--getopenfilename", str(self._workdir)], self._mention)
+
+    @Slot()
+    def addFolder(self) -> None:
+        self._pick(["--getexistingdirectory", str(self._workdir)],
+                   lambda d: self._mention([p.rstrip("/") + "/" for p in d]))
+
+    @Slot(str)
+    def sendCommand(self, cmd: str) -> None:
+        if self._type(cmd, enter=True):
+            raise_window(TERM_CLASS)
 
     @Slot("QVariant")
     def reportState(self, st) -> None:
@@ -515,7 +561,7 @@ class Bridge(QObject):
         L = self.L
         wx, wy = gx + gw - L["width"], gy + (gh - self._win_h) // 2
         return (wx + L["pad"], wy + L["inset"] + L["pad"],
-                L["width"] - L["strip"] - L["pad"], self._win_h - 2 * (L["inset"] + L["pad"]))
+                L["width"] - L["strip"] - L["pad"], self._win_h - 2 * (L["inset"] + L["pad"]) - L["bar"])
 
     def _shell(self) -> str:
         shell = os.environ.get("SHELL")
@@ -531,6 +577,33 @@ class Bridge(QObject):
         self._continue = False
         return agent
 
+    # ── tmux: the panel's agent runs inside a private tmux server ────────
+    def _tmux_on(self) -> bool:
+        return bool(self.cfg["agent"].get("tmux", True)) and shutil.which("tmux") is not None
+
+    @staticmethod
+    def _tmux(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["tmux", "-L", TMUX_SOCKET, *args], capture_output=True, text=True)
+
+    def _session_alive(self) -> bool:
+        return self._tmux_on() and self._tmux("has-session", "-t", TMUX_SESSION).returncode == 0
+
+    def _kill_session(self) -> None:
+        if self._tmux_on():
+            self._tmux("kill-session", "-t", TMUX_SESSION)
+
+    def _type(self, text: str, enter: bool = False) -> bool:
+        """Type text into the agent as if at the keyboard (needs tmux)."""
+        if not self._session_alive():
+            self._notify("Claude Notch", "No chat session to type into." if self._tmux_on()
+                         else "Typing into the chat needs tmux (sudo pacman -S tmux).")
+            return False
+        self._tmux("send-keys", "-t", TMUX_SESSION, "-l", text)
+        if enter:
+            time.sleep(0.08)                  # let the slash-command menu settle first
+            self._tmux("send-keys", "-t", TMUX_SESSION, "Enter")
+        return True
+
     def _build_argv(self, cls: str, with_theme: bool) -> list[str] | None:
         a, t = self.cfg["agent"], self.cfg["terminal"]
         shell = self._shell()
@@ -538,6 +611,11 @@ class Bridge(QObject):
         if shutil.which(shlex.split(agent)[0]) is None:
             warn(f"agent command '{agent}' not found on PATH")
         command = f"{agent}; exec {shell}" if a.get("keep_shell", True) else agent
+        if cls == TERM_CLASS and self._tmux_on():
+            # Attach to the surviving session if there is one, else start the agent in a new one.
+            conf = [] if not TMUX_CONF.is_file() else ["-f", str(TMUX_CONF)]
+            command = shlex.join(["tmux", "-L", TMUX_SOCKET, *conf, "new-session", "-A", "-s", TMUX_SESSION,
+                                  "-c", str(self._workdir), shell, "-c", command])
         subst = {"{theme}": t["theme"], "{class}": cls, "{title}": "Claude Notch",
                  "{shell}": shell, "{command}": command}
         tokens = shlex.split(t["launch"])
@@ -556,7 +634,10 @@ class Bridge(QObject):
         if argv is None:
             return False
         log(f"launching terminal: {argv} in {self._workdir}")
-        self._proc = subprocess.Popen(argv, cwd=str(self._workdir), start_new_session=True,
+        # If the notch itself was (re)started from inside a Claude Code session,
+        # do not let the panel's agent inherit that session's environment.
+        env = {k: v for k, v in os.environ.items() if not (k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"))}
+        self._proc = subprocess.Popen(argv, cwd=str(self._workdir), start_new_session=True, env=env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
 
@@ -603,6 +684,7 @@ class Bridge(QObject):
 
     def _restart_session(self, cont: bool) -> None:
         self._kill_terminal()
+        self._kill_session()
         self._continue = cont
         if self._chat:
             QTimer.singleShot(250, self._show_terminal)

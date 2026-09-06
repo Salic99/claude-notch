@@ -42,6 +42,7 @@ ok "python3 $(python3 -c 'import sys;print(".".join(map(str,sys.version_info[:3]
 for c in qdbus6 kscreen-doctor jq; do command -v "$c" >/dev/null && ok "$c" || die "$c not found (packages: qt6-tools, kscreen, jq)"; done
 command -v alacritty >/dev/null && ok "alacritty" || warn "alacritty not found — set [terminal].launch in $CONF/claude-notch/config.toml"
 command -v claude >/dev/null && ok "claude" || warn "claude not on PATH — set [agent].command if your agent is called differently"
+command -v tmux >/dev/null && ok "tmux" || warn "tmux not found — the chat's + bar (files, folders, /mcp, /plugin) needs it: sudo pacman -S tmux"
 
 echo "Installing files"
 mkdir -p "$APPDIR" "$BIN" "$CONF/claude-notch" "$CONF/autostart" "$DATA/applications"
@@ -50,6 +51,7 @@ install -m 644 statusline/usage-feed.sh "$APPDIR/"
 install -m 755 bin/claude-notch "$BIN/claude-notch"
 install -m 755 bin/claude-notch-activity "$BIN/claude-notch-activity"
 install -m 644 config/alacritty.toml "$CONF/claude-notch/alacritty.toml"
+install -m 644 config/tmux.conf "$CONF/claude-notch/tmux.conf"
 [[ -f "$CONF/claude-notch/config.toml" ]] || install -m 644 config/config.example.toml "$CONF/claude-notch/config.toml"
 rm -f "$APPDIR/place.js" "$APPDIR"/claude-notch-kwin-*.js 2>/dev/null || true
 ok "app → $APPDIR, launcher → $BIN/claude-notch, config → $CONF/claude-notch/"

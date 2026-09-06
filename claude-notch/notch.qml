@@ -21,6 +21,7 @@ Window {
     readonly property int sliverH: lay.sliver_h
     readonly property int panelW:  lay.panel_w
     readonly property int chatInset: lay.inset
+    readonly property int barH: lay.bar                    // the "+" bar under the terminal
 
     width:  fullW
     height: bridge.winH
@@ -35,7 +36,9 @@ Window {
               restart: "Restart notch", quit: "Quit", monitor: "Monitor", width: "Panel width",
               autostart: "Start at login", language: "Language", editConfig: "Edit config file",
               log: "View log", about: "About", back: "Back", halfScreen: "Half of the screen",
-              langSystem: "System", version: "Version", repo: "Project page" },
+              langSystem: "System", version: "Version", repo: "Project page",
+              addFiles: "Add files or photos", addFolder: "Add folder", connectors: "Connectors",
+              plugins: "Plugins", plusHint: "Add to the conversation" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -44,7 +47,9 @@ Window {
               restart: "Restartovat notch", quit: "Ukončit", monitor: "Monitor", width: "Šířka panelu",
               autostart: "Spouštět po přihlášení", language: "Jazyk", editConfig: "Upravit konfiguraci",
               log: "Zobrazit log", about: "O aplikaci", back: "Zpět", halfScreen: "Polovina obrazovky",
-              langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu" }
+              langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu",
+              addFiles: "Přidat soubory nebo fotky", addFolder: "Přidat složku", connectors: "Konektory",
+              plugins: "Pluginy", plusHint: "Přidat do konverzace" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -52,7 +57,13 @@ Window {
     // The shape follows chatVisual: immediately on open, but on close only after
     // the terminal has faded out — otherwise it would stick out of the collapsing shape.
     property bool chatVisual: false
-    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else collapseDelay.restart(); updateBubble() }
+    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else { collapseDelay.restart(); plusOpen = false }; updateBubble() }
+    // the "+" popup: like the menu it must sit above the terminal while open
+    property bool plusOpen: false
+    onPlusOpenChanged: {
+        if (plusOpen) { menuOpen = false; if (chat) bridge.raiseNotch() }
+        else if (chat && !menuOpen) bridge.raiseTerminal()
+    }
     Timer { id: collapseDelay; interval: cfg.timing.collapse_delay_ms; onTriggered: win.chatVisual = false }
 
     // The terminal is parked invisible at click time and revealed the instant the
@@ -87,13 +98,14 @@ Window {
     readonly property real grow: Math.max(0, Math.min(1, (shape.sw - sliverW) / (bubbleW - sliverW)))
 
     onMenuOpenChanged: {
-        if (menuOpen) { menuPage = "main"; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
-        else { pointerWasInside = false; if (chat) bridge.raiseTerminal() }
+        if (menuOpen) { menuPage = "main"; plusOpen = false; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
+        else { pointerWasInside = false; if (chat && !plusOpen) bridge.raiseTerminal() }
         updateBubble()
     }
     Connections {
         target: bridge
         function onMenuRequested() { win.menuOpen = !win.menuOpen }
+        function onPlusRequested() { win.plusOpen = !win.plusOpen }
         function onDetailsRequested() { win.pinInfo = !win.pinInfo }
     }
 
@@ -102,7 +114,11 @@ Window {
     // so the mask is not re-sent sixty times a second.
     readonly property var hotRects: {
         var W = width, H = height, r = []
-        if (chat) r.push([W - stripW, 0, stripW, H])
+        if (chat) {
+            r.push([W - stripW, 0, stripW, H])
+            r.push([lay.pad, H - chatInset - lay.pad - barH, W - stripW - lay.pad, barH])
+            if (plusOpen) r.push([plusMenu.x - 6, plusMenu.y - 6, plusMenu.width + 12, plusMenu.height + 12])
+        }
         else if (showBubble || pinInfo) {
             var hw = bubbleW + 10 + panelW + 12, hh = Math.max(bubbleH, 200) + 60
             r.push([W - hw, (H - hh) / 2, hw, hh])
@@ -262,9 +278,19 @@ Window {
                 ctx.quadraticCurveTo(W, b, W, b + cr)      // inverted corner, bottom
                 ctx.closePath()
                 ctx.fill()
+                // While a popup holds the notch above the terminal, leave the
+                // terminal's rectangle open so it stays visible underneath.
+                if (win.chat && win.chatVisual && (win.menuOpen || win.plusOpen)) {
+                    var pad = lay.pad, ins = win.chatInset
+                    ctx.clearRect(pad, ins + pad, W - win.stripW - pad, height - 2 * (ins + pad) - win.barH)
+                }
             }
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
+            Connections { target: win
+                function onMenuOpenChanged() { cv.requestPaint() }
+                function onPlusOpenChanged() { cv.requestPaint() }
+                function onChatVisualChanged() { cv.requestPaint() } }
         }
     }
 
@@ -569,6 +595,7 @@ Window {
     // more — the main area, the orb or the menu — after a short debounce that
     // bridges the hand-over between them.
     readonly property bool pointerInside: mainArea.containsMouse || orbHover.hovered || menuHover.hovered
+                                          || barHover.hovered || plusHover.hovered || plusMenuHover.hovered
     // Close on leave only once the pointer has actually been inside — so a menu
     // opened programmatically (a shortcut, `claude-notch menu`) stays up until
     // the user moves onto it and away again, instead of vanishing at once.
@@ -577,7 +604,7 @@ Window {
         if (pointerInside) { pointerWasInside = true; leaveTimer.stop() }
         else if (pointerWasInside) leaveTimer.restart()
     }
-    Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.pinInfo = false } }
+    Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.plusOpen = false; win.pinInfo = false } }
 
     // ── the menu ─────────────────────────────────────────────────────
     function menuItems(page) {
@@ -704,6 +731,106 @@ Window {
                             if (typeof modelData.a === "function") modelData.a()
                             if (modelData.keep !== true) win.menuOpen = false
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── the "+" bar under the chat terminal: files, folder, connectors, plugins ──
+    Item {
+        id: plusBar
+        x: lay.pad; width: win.width - win.stripW - lay.pad
+        y: win.height - win.chatInset - lay.pad - win.barH; height: win.barH
+        opacity: win.chat && win.chatVisual ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: 160 } }
+        HoverHandler { id: barHover }
+
+        Rectangle { x: 6; y: 0; width: parent.width - 12; height: 1; color: Qt.rgba(1, 1, 1, 0.07) }
+        Rectangle {
+            id: plusBtn
+            x: 8; anchors.verticalCenter: parent.verticalCenter
+            width: 28; height: 28; radius: 14
+            color: Qt.rgba(1, 1, 1, plusHover.hovered || win.plusOpen ? 0.18 : 0.09)
+            border.color: Qt.rgba(1, 1, 1, 0.12); border.width: 1
+            Behavior on color { ColorAnimation { duration: 90 } }
+            Text {           // the + turns into an × while the popup is up
+                anchors.centerIn: parent; anchors.verticalCenterOffset: -1
+                text: "+"; color: "#ebebf0"; font.pixelSize: 21; font.weight: Font.Light
+                rotation: win.plusOpen ? 45 : 0
+                Behavior on rotation { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 0.8 } }
+            }
+        }
+        Text {
+            anchors.left: plusBtn.right; anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            text: win.txt.plusHint || ""; color: "#7a7a80"; font.pixelSize: 12
+            opacity: plusHover.hovered && !win.plusOpen ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+        }
+        Item {
+            x: 0; y: 0; width: 44; height: parent.height
+            HoverHandler { id: plusHover }
+            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: win.plusOpen = !win.plusOpen }
+        }
+    }
+
+    Rectangle {
+        id: plusMenu
+        width: 232
+        height: plusCol.implicitHeight + 12
+        radius: 16
+        color: pal.background
+        border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
+        x: plusBar.x + 4
+        y: plusBar.y - height - 4
+        opacity: win.plusOpen ? 1 : 0
+        visible: opacity > 0.01
+        transform: Translate { y: win.plusOpen ? 0 : 8
+                               Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutQuint } } }
+        Behavior on opacity { NumberAnimation { duration: 120 } }
+        HoverHandler { id: plusMenuHover }
+
+        Column {
+            id: plusCol
+            x: 6; y: 6
+            width: parent.width - 12
+            Repeater {
+                model: [
+                    { l: win.txt.addFiles,   a: function() { bridge.addFiles() } },
+                    { l: win.txt.addFolder,  a: function() { bridge.addFolder() } },
+                    { l: win.txt.connectors, a: function() { bridge.sendCommand("/mcp") } },
+                    { l: win.txt.plugins,    a: function() { bridge.sendCommand("/plugin") } }
+                ]
+                delegate: Item {
+                    required property var modelData
+                    width: plusCol.width; height: 32
+                    readonly property bool hot: plusItemHover.hovered
+                    Rectangle {
+                        anchors.fill: parent; radius: 10
+                        color: "#ffffff"; opacity: parent.hot ? 0.16 : 0
+                        Behavior on opacity { NumberAnimation { duration: 90 } }
+                    }
+                    Rectangle {
+                        x: 2; width: 3; radius: 1.5
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: parent.hot ? parent.height - 12 : 0
+                        color: win.colorFor(30)
+                        Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
+                    }
+                    Text {
+                        anchors.left: parent.left; anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.l || ""
+                        color: parent.hot ? "#ffffff" : "#d8d8dc"
+                        font.pixelSize: 13
+                        Behavior on color { ColorAnimation { duration: 90 } }
+                    }
+                    HoverHandler { id: plusItemHover }
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onTapped: { win.plusOpen = false; modelData.a() }
                     }
                 }
             }

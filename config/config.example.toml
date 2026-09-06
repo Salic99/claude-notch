@@ -17,6 +17,7 @@ launch = "alacritty --config-file {theme} --class {class} -T {title} -e {shell} 
 command = "claude"          # anything on PATH; e.g. "codex", "opencode"
 workdir = "~/Projects"      # where the agent starts
 keep_shell = true           # drop into a shell when the agent exits instead of closing the panel
+tmux = true                 # run the agent inside tmux: lets the "+" bar type into it and keeps the session when the panel closes
 
 [screen]
 name = "auto"               # "auto" = KDE primary (priority 1), or an output name like "DP-2"
@@ -33,6 +34,7 @@ sliver_hot = 14             # how wide the hover zone is when resting
 bubble_w = 78
 bubble_h = 118
 panel_w = 300               # usage details panel shown on hover
+bar = 40                    # height of the "+" bar under the chat terminal
 
 [timing]
 fade_ms = 130               # terminal fade-in; it is revealed the instant the container covers it

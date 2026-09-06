@@ -33,9 +33,10 @@ The numbers come from Claude Code itself. Claude Code hands its status line a JS
 - Python 3.11+ with **PySide6** (QtQml, QtDBus)
 - `qdbus6`, `kscreen-doctor`, `jq`
 - a terminal — **alacritty** by default; kitty/foot/others via `[terminal].launch`
+- **tmux** (optional) — for the + bar under the chat and sessions that survive the panel
 - Claude Code with a plan that reports rate limits (Pro/Max); any other agent CLI works for the chat panel
 
-On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty`
+On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty tmux`
 
 ## Install
 
@@ -67,6 +68,21 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
 
 The chat is a normal terminal window (`alacritty` with the shipped theme) running `claude` in `~/Projects`, dropping to your shell when the agent exits so the panel never closes under you. It keeps its session while folded — folding hides the window, it does not kill it.
+
+Inside the terminal the agent runs in a private **tmux** session (no prefix key, no status line — you will not notice it). That is what lets the panel type into the agent, and it means the session outlives the window: restart the notch, or even close the terminal window, and the next open reattaches to the same conversation. Set `[agent].tmux = false` to run the agent bare.
+
+### The + bar
+
+Under the terminal sits a **+**. Click it (or run `claude-notch plus`) for:
+
+| Item | What it types into the chat |
+|---|---|
+| Add files or photos | a KDE file picker; each pick becomes an `@path` mention (images included) |
+| Add folder | a directory picker; `@folder/` |
+| Connectors | `/mcp` — Claude Code's MCP server dialog |
+| Plugins | `/plugin` — the plugin manager |
+
+Mentions are inserted without pressing Enter, so you can add your question after them.
 
 ## Live activity
 
