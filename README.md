@@ -56,9 +56,27 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | click the sliver / bubble | unfold the chat |
 | click the side strip | fold it back |
 | `claude-notch toggle` | the same, for shortcuts and scripts |
+| hover the orb below the notch, click it | the menu (`claude-notch menu`) |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 
 The chat is a normal terminal window (`alacritty` with the shipped theme) running `claude` in `~/Projects`, dropping to your shell when the agent exits so the panel never closes under you. It keeps its session while folded — folding hides the window, it does not kill it.
+
+## The orb menu
+
+<p align="center"><img src="docs/screenshots/menu.png" alt="The orb menu" width="240"></p>
+
+Below the notch sits a small arc — the **orb**. Hover it and it becomes a gear; click it (or run `claude-notch menu`) for the menu:
+
+| | |
+|---|---|
+| **Open / Close chat**, **New session**, **Continue last session** | session control without touching the terminal (`claude --continue` for the last one) |
+| **Project ›** | pick the folder the agent starts in — the configured workdir and its most recent sub-folders |
+| **Open in a window** | the same agent in a normal, decorated terminal window for longer work |
+| **Show details** | keeps the usage bubble open until you click elsewhere |
+| **Settings ›** | **Monitor** (lists your outputs), **Panel width**, **Start at login**, **Language**, plus *Edit config file* and *View log* |
+| **Restart notch** / **Quit** | |
+
+Settings that change the layout are written to `config.toml` (comments preserved) and the notch restarts itself in place — the chat's terminal is a separate process and keeps its session.
 
 ## Configure
 

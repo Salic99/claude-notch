@@ -28,9 +28,23 @@ Window {
     // ── strings ──────────────────────────────────────────────────────
     readonly property var txt: ({
         en: { title: "Claude Usage", session: "Current session", all: "All models",
-              used: "% used", none: "no data", resetIn: "resets in", now: "now" },
+              used: "% used", none: "no data", resetIn: "resets in", now: "now",
+              chatOpen: "Open chat", chatClose: "Close chat", newSession: "New session",
+              continueSession: "Continue last session", project: "Project", window: "Open in a window",
+              details: "Show details", refresh: "Refresh", settings: "Settings",
+              restart: "Restart notch", quit: "Quit", monitor: "Monitor", width: "Panel width",
+              autostart: "Start at login", language: "Language", editConfig: "Edit config file",
+              log: "View log", about: "About", back: "Back", halfScreen: "Half of the screen",
+              langSystem: "System", version: "Version", repo: "Project page" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
-              used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď" }
+              used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
+              chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
+              continueSession: "Pokračovat v poslední", project: "Projekt", window: "Otevřít v okně",
+              details: "Zobrazit podrobnosti", refresh: "Obnovit", settings: "Nastavení",
+              restart: "Restartovat notch", quit: "Ukončit", monitor: "Monitor", width: "Šířka panelu",
+              autostart: "Spouštět po přihlášení", language: "Jazyk", editConfig: "Upravit konfiguraci",
+              log: "Zobrazit log", about: "O aplikaci", back: "Zpět", halfScreen: "Polovina obrazovky",
+              langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu" }
     })[cfg.ui.language] || ({})
 
     // ── state ────────────────────────────────────────────────────────
@@ -50,10 +64,35 @@ Window {
 
     property bool hover: false
     property bool suppressHover: false     // after a closing click, until the pointer leaves
-    readonly property bool showBubble: hover && !chat
+    property bool pinInfo: false           // "Show details" from the menu keeps the bubble open
+    property bool menuOpen: false
+    property string menuPage: "main"
+    readonly property bool showBubble: (hover || pinInfo) && !chat && !menuOpen
     // How far the shape has grown out of the sliver (0..1). Drives what may be visible:
     // nothing is ever drawn where there is no dark background underneath.
     readonly property real grow: Math.max(0, Math.min(1, (shape.sw - sliverW) / (bubbleW - sliverW)))
+
+    onMenuOpenChanged: {
+        if (menuOpen) { menuPage = "main"; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
+        else if (chat) bridge.raiseTerminal()
+    }
+    Connections { target: bridge; function onMenuRequested() { win.menuOpen = !win.menuOpen } }
+
+    // ── input region: the window only reacts where something is drawn ──
+    // Computed from the *target* geometry of each state (not the animated one),
+    // so the mask is not re-sent sixty times a second.
+    readonly property var hotRects: {
+        var W = width, H = height, r = []
+        if (chat) r.push([W - stripW, 0, stripW, H])
+        else if (showBubble || pinInfo) {
+            var hw = bubbleW + 10 + panelW + 12, hh = Math.max(bubbleH, 200) + 60
+            r.push([W - hw, (H - hh) / 2, hw, hh])
+        } else r.push([W - lay.sliver_hot, (H - sliverH - 28) / 2, lay.sliver_hot, sliverH + 28])
+        r.push([orb.targetCx - 18, orb.targetCy - 18, 36, 36])
+        if (menuOpen) r.push([menu.x - 6, menu.y - 6, menu.width + 12, menu.height + 12])
+        return r
+    }
+    onHotRectsChanged: bridge.applyMask(hotRects)
 
     // ── usage data ───────────────────────────────────────────────────
     property int  fiveHour: -1
@@ -84,7 +123,7 @@ Window {
         return h > 0 ? (h + " h " + m + " m") : (Math.max(1, m) + " min")
     }
 
-    Component.onCompleted: visible = true
+    Component.onCompleted: { visible = true; bridge.applyMask(hotRects) }
     Timer { interval: 30000; running: true; repeat: true; onTriggered: win.now = Date.now() / 1000 }
 
     // ── the starburst: the real mark if the installer extracted one from a locally
@@ -322,16 +361,198 @@ Window {
         }
     }
 
-    // ── input ────────────────────────────────────────────────────────
+    // ── input over the shape ─────────────────────────────────────────
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
-        onEntered: { if (!win.chat && !win.suppressHover) win.hover = true; bridge.reload() }
-        onExited:  { win.hover = false; win.suppressHover = false }
-        onPositionChanged: if (!win.chat && !win.suppressHover) win.hover = true
-        onClicked: { win.hover = false; if (win.chat) win.suppressHover = true; bridge.toggle() }
+        onEntered: { if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true; bridge.reload() }
+        onExited:  { win.hover = false; win.suppressHover = false; win.menuOpen = false }
+        onPositionChanged: if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true
+        onClicked: {
+            if (win.menuOpen) { win.menuOpen = false; return }
+            if (win.pinInfo)  { win.pinInfo = false; return }
+            win.hover = false
+            if (win.chat) win.suppressHover = true
+            bridge.toggle()
+        }
     }
 
-    onShowBubbleChanged: bridge.setExpanded(showBubble)
+    // ── the orb: an arc below the notch; a gear on hover; click → menu ──
+    Item {
+        id: orb
+        readonly property int r: 14
+        // target (state) position — used for the input mask and the menu anchor
+        readonly property real targetCx: win.chat ? win.width - win.stripW / 2
+                                        : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
+        readonly property real targetCy: win.chat ? win.height - win.chatInset - 30
+                                        : (win.height + (win.showBubble ? win.bubbleH : win.sliverH)) / 2 + 24
+        // drawn position — follows the animated shape
+        property real cx: win.chatVisual ? win.width - win.stripW / 2
+                                         : (win.showBubble ? win.width - win.bubbleW / 2 : win.width - 16)
+        property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 24
+        Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
+
+        x: cx - r - 4; y: cy - r - 4
+        width: 2 * r + 8; height: 2 * r + 8
+        property bool hot: orbArea.containsMouse || win.menuOpen
+
+        Canvas {
+            id: orbCv
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d"); ctx.reset()
+                var R = orb.r, cx = width / 2, cy = height / 2
+                if (orb.hot) {
+                    ctx.fillStyle = pal.background
+                    ctx.beginPath(); ctx.arc(cx, cy, R + 2, 0, 2 * Math.PI); ctx.fill()
+                    ctx.strokeStyle = "#ebebf0"; ctx.lineCap = "round"
+                    ctx.lineWidth = R * 0.26
+                    ctx.beginPath(); ctx.arc(cx, cy, R * 0.40, 0, 2 * Math.PI); ctx.stroke()
+                    for (var i = 0; i < 8; i++) {          // gear teeth
+                        var a = i * Math.PI / 4
+                        ctx.beginPath()
+                        ctx.moveTo(cx + Math.cos(a) * R * 0.62, cy + Math.sin(a) * R * 0.62)
+                        ctx.lineTo(cx + Math.cos(a) * R * 0.90, cy + Math.sin(a) * R * 0.90)
+                        ctx.stroke()
+                    }
+                } else {                                    // resting arc
+                    ctx.lineCap = "round"
+                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 7
+                    ctx.beginPath(); ctx.arc(cx - 4, cy - 5, R - 1, Math.PI * 0.5, Math.PI * 1.2); ctx.stroke()   // ╰ hook toward the edge
+                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.2
+                    ctx.beginPath(); ctx.arc(cx - 4, cy - 5, R - 1, Math.PI * 0.5, Math.PI * 1.2); ctx.stroke()   // ╰ hook toward the edge
+                }
+            }
+        }
+        onHotChanged: orbCv.requestPaint()
+        Connections { target: win; function onStaleChanged() { orbCv.requestPaint() } }
+
+        MouseArea {
+            id: orbArea
+            anchors.fill: parent
+            hoverEnabled: true
+            onEntered: win.hover = false
+            onClicked: win.menuOpen = !win.menuOpen
+        }
+    }
+
+    // ── the menu ─────────────────────────────────────────────────────
+    function menuItems(page) {
+        var T = txt
+        switch (page) {
+        case "main": return [
+            { l: win.chat ? T.chatClose : T.chatOpen, a: function() { bridge.toggle() } },
+            { l: T.newSession,      a: function() { bridge.newSession() } },
+            { l: T.continueSession, a: function() { bridge.continueSession() } },
+            { l: T.project,         sub: "project" },
+            { l: T.window,          a: function() { bridge.openWindow() } },
+            { sep: true },
+            { l: T.details,         a: function() { win.pinInfo = true }, hide: win.chat },
+            { l: T.refresh,         a: function() { bridge.reload() } },
+            { sep: true },
+            { l: T.settings,        sub: "settings" },
+            { l: T.about,           sub: "about" },
+            { sep: true },
+            { l: T.restart,         a: function() { bridge.restart() } },
+            { l: T.quit,            a: function() { bridge.quit() } }
+        ]
+        case "settings": return [
+            { l: T.monitor,    sub: "monitor" },
+            { l: T.width,      sub: "width" },
+            { l: T.autostart,  check: bridge.autostart, a: function() { bridge.setAutostart(!bridge.autostart) }, keep: true },
+            { l: T.language,   sub: "language" },
+            { sep: true },
+            { l: T.editConfig, a: function() { bridge.openConfig() } },
+            { l: T.log,        a: function() { bridge.openLog() } }
+        ]
+        case "project": return bridge.projects.map(function(p) {
+            return { l: p.name, check: p.current, a: function() { bridge.setProject(p.path) } } })
+        case "monitor": return bridge.outputs.map(function(o) {
+            return { l: o.label, check: o.current, a: function() { bridge.setScreen(o.name) } } })
+        case "width": return [560, 720, 900, Math.round(Screen.width / 2)].map(function(w, i) {
+            return { l: (i === 3 ? T.halfScreen + " (" + w + " px)" : w + " px"),
+                     check: bridge.panelWidth === w, a: function() { bridge.setWidth(w) } } })
+        case "language": return [["auto", T.langSystem], ["en", "English"], ["cs", "Čeština"]].map(function(x) {
+            return { l: x[1], check: bridge.languageSetting === x[0], a: function() { bridge.setLanguage(x[0]) } } })
+        case "about": return [
+            { l: "Claude Notch " + bridge.version, info: true },
+            { l: T.repo, a: function() { bridge.openRepo() } }
+        ]
+        }
+        return []
+    }
+    readonly property var pageItems: {
+        var items = menuItems(menuPage).filter(function(i) { return !i.hide })
+        if (menuPage !== "main") items.unshift({ l: "‹  " + txt.back, back: true })
+        return items
+    }
+
+    Rectangle {
+        id: menu
+        width: 236
+        height: menuCol.implicitHeight + 12
+        radius: 16
+        color: pal.background
+        border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
+        x: win.width - width - 10
+        y: Math.max(8, orb.targetCy - orb.r - 10 - height)
+        opacity: win.menuOpen ? 1 : 0
+        visible: opacity > 0.01
+        transform: Translate { y: win.menuOpen ? 0 : 8
+                               Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutQuint } } }
+        Behavior on opacity { NumberAnimation { duration: 120 } }
+
+        Column {
+            id: menuCol
+            x: 6; y: 6
+            width: parent.width - 12
+
+            Repeater {
+                model: win.pageItems
+                delegate: Item {
+                    required property var modelData
+                    width: menuCol.width
+                    height: modelData.sep === true ? 9 : 32
+
+                    Rectangle {      // separator
+                        visible: modelData.sep === true
+                        anchors.centerIn: parent; width: parent.width - 16; height: 1; color: Qt.rgba(1, 1, 1, 0.08)
+                    }
+                    Rectangle {      // hover highlight
+                        anchors.fill: parent; radius: 10
+                        color: "#ffffff"; opacity: itemArea.containsMouse && modelData.sep !== true && modelData.info !== true ? 0.09 : 0
+                    }
+                    Text {
+                        visible: modelData.sep !== true
+                        anchors.left: parent.left; anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData.l || ""
+                        color: modelData.info === true ? "#8e8e93" : "#ebebf0"
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        visible: modelData.sep !== true && (typeof modelData.sub === "string" || modelData.check === true)
+                        anchors.right: parent.right; anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: typeof modelData.sub === "string" ? "›" : "✓"
+                        color: typeof modelData.sub === "string" ? "#8e8e93" : win.colorFor(30)
+                        font.pixelSize: 13; font.bold: true
+                    }
+                    MouseArea {
+                        id: itemArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: modelData.sep !== true && modelData.info !== true
+                        onClicked: {
+                            if (modelData.back === true) { win.menuPage = "main"; return }
+                            if (typeof modelData.sub === "string") { win.menuPage = modelData.sub; return }
+                            if (typeof modelData.a === "function") modelData.a()
+                            if (modelData.keep !== true) win.menuOpen = false
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

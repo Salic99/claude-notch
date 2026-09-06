@@ -4,12 +4,13 @@
 Rest:  a thin sliver on the screen edge, coloured by how much of your plan is used.
 Hover: it grows into a bubble with a usage ring and a details panel.
 Click: the bubble unfolds into a terminal running your agent; click the strip to fold it back.
+Orb:   the small arc below the notch opens a menu (sessions, project, monitor, width …).
 
 The window is one fixed-size transparent Qt Quick surface; all morphing happens
 inside it (60 fps QML animations). The compositor cannot let a Wayland client
 position itself, so the notch and the terminal are placed through KWin's
 scripting API. The input region (window mask) follows the visible shape, so a
-resting notch only reacts to the sliver.
+resting notch only reacts to the sliver and the orb.
 """
 from __future__ import annotations
 
@@ -34,16 +35,22 @@ from PySide6.QtDBus import QDBusConnection
 from PySide6.QtGui import QGuiApplication, QRegion
 from PySide6.QtQml import QQmlApplicationEngine
 
+__version__ = "0.1.0"
+REPO_URL = "https://github.com/Salic99/claude-notch"
+
 APP_DIR = Path(__file__).resolve().parent
 HOME = Path.home()
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "claude-notch"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 USAGE_FILE = CACHE_DIR / "claude-usage.json"
+LOG_FILE = CACHE_DIR / "claude-notch.log"
 KWIN_SCRIPT = CACHE_DIR / "claude-notch-kwin.js"
+AUTOSTART_FILE = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "autostart" / "claude-notch.desktop"
 
 APP_ID = "claude-notch"                     # Wayland app_id of the notch window
 TERM_CLASS = "claude-notch-terminal"        # app_id of the chat terminal
+WINDOW_CLASS = "claude-notch-window"        # app_id of a free-standing agent window
 DBUS_SERVICE = "org.claudenotch.Notch"
 DBUS_PATH = "/Notch"
 
@@ -67,6 +74,7 @@ DEFAULTS = {
                "crit": "#ff453a", "none": "#6b6b6b"},
     "ui": {"language": "auto"},
 }
+LANGUAGES = ("en", "cs")
 
 VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
 
@@ -98,50 +106,97 @@ def load_config() -> dict:
                 cfg = _merge(DEFAULTS, tomllib.loads(CONFIG_FILE.read_text()))
             except Exception as e:                       # noqa: BLE001
                 warn(f"cannot parse {CONFIG_FILE}: {e}; using defaults")
-    lang = cfg["ui"]["language"]
+    raw = str(cfg["ui"]["language"])
+    lang = raw
     if lang == "auto":
         lang = (QLocale.system().name() or os.environ.get("LANG") or "en")[:2].lower()
-    cfg["ui"]["language"] = lang if lang in ("en", "cs") else "en"
+    cfg["ui"]["language_setting"] = raw
+    cfg["ui"]["language"] = lang if lang in LANGUAGES else "en"
     return cfg
 
 
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def set_config(section: str, key: str, value) -> None:
+    """Update one key in config.toml in place, keeping comments and layout.
+    Creates the file from the example, or the section/key, if missing."""
+    if not CONFIG_FILE.exists():
+        example = APP_DIR.parent / "config" / "config.example.toml"
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(example.read_text() if example.exists() else "")
+    lines = CONFIG_FILE.read_text().splitlines()
+    out, in_sec, done, sec_end = [], False, False, None
+    for i, ln in enumerate(lines):
+        m = re.match(r"\s*\[([^\]]+)\]", ln)
+        if m:
+            if in_sec and not done:
+                sec_end = len(out)
+            in_sec = m.group(1).strip() == section
+        elif in_sec and not done and re.match(rf"\s*{re.escape(key)}\s*=", ln):
+            comment = ln.split("#", 1)[1] if "#" in ln.split("=", 1)[1] else None
+            ln = f"{key} = {_toml_value(value)}" + (f"   #{comment}" if comment else "")
+            done = True
+        out.append(ln)
+    if not done:
+        if sec_end is not None:
+            out.insert(sec_end, f"{key} = {_toml_value(value)}")
+        elif in_sec:
+            out.append(f"{key} = {_toml_value(value)}")
+        else:
+            out += ["", f"[{section}]", f"{key} = {_toml_value(value)}"]
+    CONFIG_FILE.write_text("\n".join(out) + "\n")
+
+
 # ── screens ────────────────────────────────────────────────────────────────
-def primary_geometry(name: str = "auto") -> tuple[int, int, int, int]:
-    """Geometry of the target output. 'auto' picks KDE's primary (priority 1),
-    which is what the user set in System Settings — Qt's primaryScreen() often
-    disagrees on multi-monitor setups."""
+def list_outputs() -> list[dict]:
+    """Outputs as [{name, geo, primary}] from kscreen-doctor; 'primary' is KDE's
+    priority-1 output (what System Settings calls primary — Qt often disagrees)."""
+    outs: list[dict] = []
     try:
-        out = subprocess.run(["kscreen-doctor", "-o"], capture_output=True,
-                             text=True, timeout=8).stdout
-        out = re.sub(r"\x1b\[[0-9;]*m", "", out)
-        blocks: list[dict] = []
-        cur: dict | None = None
-        for line in out.splitlines():
+        raw = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True, timeout=8).stdout
+        raw = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+        cur = None
+        for line in raw.splitlines():
             if line.startswith("Output:"):
-                cur = {"name": line.split()[2] if len(line.split()) > 2 else "", "prio": None, "geo": None}
-                blocks.append(cur)
+                parts = line.split()
+                cur = {"name": parts[2] if len(parts) > 2 else "?", "geo": None, "primary": False, "enabled": True}
+                outs.append(cur)
             elif cur is not None:
                 m = re.search(r"priority (\d+)", line)
                 if m:
-                    cur["prio"] = int(m.group(1))
+                    cur["primary"] = int(m.group(1)) == 1
                 m = re.search(r"Geometry:\s*(-?\d+),(-?\d+)\s+(\d+)x(\d+)", line)
                 if m:
                     cur["geo"] = tuple(int(g) for g in m.groups())
-        for b in blocks:
-            if b["geo"] and ((name == "auto" and b["prio"] == 1) or b["name"] == name):
-                return b["geo"]
-        if name != "auto":
-            warn(f"output '{name}' not found; falling back to primary")
+                if re.search(r"\bdisabled\b", line):
+                    cur["enabled"] = False
     except Exception as e:                               # noqa: BLE001
-        log(f"kscreen-doctor unavailable ({e}); using Qt primary screen")
+        log(f"kscreen-doctor unavailable ({e})")
+    return [o for o in outs if o["geo"]]
+
+
+def primary_geometry(name: str = "auto") -> tuple[int, int, int, int]:
+    outs = list_outputs()
+    for o in outs:
+        if (name == "auto" and o["primary"]) or o["name"] == name:
+            return o["geo"]
+    if name != "auto" and outs:
+        warn(f"output '{name}' not found; falling back to primary")
+        for o in outs:
+            if o["primary"]:
+                return o["geo"]
     g = QGuiApplication.primaryScreen().geometry()
     return (g.x(), g.y(), g.width(), g.height())
 
 
 # ── KWin scripting ─────────────────────────────────────────────────────────
 _seq = 0
-
-
 _kwin_lock = threading.Lock()
 _kwin_jobs: list[str] = []
 
@@ -188,6 +243,7 @@ def _kwin_worker() -> None:
 
 _PIN = ("win.keepAbove = true; win.skipTaskbar = true; "
         "win.skipPager = true; win.skipSwitcher = true;")
+_RAISE = "if (workspace.raiseWindow) workspace.raiseWindow(win); else workspace.activeWindow = win;"
 
 
 def _fade_js(ms: int) -> str:
@@ -214,7 +270,7 @@ workspace.windowList().forEach(function(win) {{
     {"win.opacity = 0;" if (hidden or fade_ms) else "win.opacity = 1;"}
     if (win.minimized) win.minimized = false;
     win.frameGeometry = {{ x: {x}, y: {y}, width: {w}, height: {h} }};
-    {"workspace.activeWindow = win;" if raise_it else ""}
+    {_RAISE if raise_it else ""}
     {_fade_js(fade_ms) if fade_ms else ""}
 }});
 """)
@@ -249,11 +305,22 @@ workspace.windowList().forEach(function(win) {{
 """)
 
 
+def raise_window(cls: str) -> None:
+    run_kwin(f"""
+workspace.windowList().forEach(function(win) {{
+    if (win.resourceClass !== "{cls}" || win.minimized) return;
+    {_RAISE}
+}});
+""")
+
+
 # ── the bridge between Python and QML (also exported on D-Bus) ─────────────
-@ClassInfo({"D-Bus Interface": DBUS_SERVICE})   # explicit: the app name has a hyphen, invalid in a derived interface name
+@ClassInfo({"D-Bus Interface": DBUS_SERVICE})
 class Bridge(QObject):
     usageChanged = Signal()
     chatOpenChanged = Signal()
+    settingsChanged = Signal()
+    menuRequested = Signal()
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -262,8 +329,11 @@ class Bridge(QObject):
         self.T = cfg["timing"]
         self._usage = self._empty()
         self._window = None
+        self._pending_rects = None
         self._chat = False
         self._proc: subprocess.Popen | None = None
+        self._workdir = self._resolve_workdir(cfg["agent"]["workdir"])
+        self._continue = False
         self._geo = primary_geometry(cfg["screen"]["name"])
         self._win_h = int(self._geo[3] * cfg["screen"]["height_ratio"])
 
@@ -321,7 +391,6 @@ class Bridge(QObject):
             return
         self._chat = True
         self.chatOpenChanged.emit()
-        self.setExpanded(True)
         self._show_terminal()
 
     @Slot()
@@ -330,14 +399,26 @@ class Bridge(QObject):
             return
         self._chat = False
         self.chatOpenChanged.emit()
-        self.setExpanded(False)
         hide_window(TERM_CLASS)
 
     @Slot()
     def quit(self) -> None:
         QGuiApplication.quit()
 
+    @Slot()
+    def menu(self) -> None:
+        """Open/close the orb menu (also reachable as `claude-notch menu`)."""
+        self.menuRequested.emit()
+
     # ── terminal ────────────────────────────────────────────────────────
+    @staticmethod
+    def _resolve_workdir(path: str) -> Path:
+        p = Path(os.path.expanduser(path))
+        return p if p.is_dir() else HOME
+
+    def _term_bin(self) -> str:
+        return os.path.basename(shlex.split(self.cfg["terminal"]["launch"])[0])
+
     def _terminal_running(self) -> bool:
         if self._proc is not None and self._proc.poll() is None:
             return True
@@ -345,10 +426,15 @@ class Bridge(QObject):
         # a process whose command line *starts* with the terminal binary and
         # carries our class. Anchored, so an editor with the theme file open
         # does not count.
-        term = shlex.split(self.cfg["terminal"]["launch"])[0]
-        r = subprocess.run(["pgrep", "-f", f"^{re.escape(os.path.basename(term))}\\b.*{TERM_CLASS}"],
+        r = subprocess.run(["pgrep", "-f", f"^{re.escape(self._term_bin())}\\b.*{TERM_CLASS}"],
                            capture_output=True)
         return r.returncode == 0
+
+    def _kill_terminal(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+        subprocess.run(["pkill", "-f", f"^{re.escape(self._term_bin())}\\b.*{TERM_CLASS}"], capture_output=True)
+        self._proc = None
 
     def _terminal_rect(self) -> tuple[int, int, int, int]:
         self._geo = primary_geometry(self.cfg["screen"]["name"])   # monitors may have changed
@@ -358,28 +444,46 @@ class Bridge(QObject):
         return (wx + L["pad"], wy + L["inset"] + L["pad"],
                 L["width"] - L["strip"] - L["pad"], self._win_h - 2 * (L["inset"] + L["pad"]))
 
-    def _launch_terminal(self) -> bool:
-        a, t = self.cfg["agent"], self.cfg["terminal"]
+    def _shell(self) -> str:
         shell = os.environ.get("SHELL")
         if not shell:
             import pwd
             shell = pwd.getpwuid(os.getuid()).pw_shell or shutil.which("bash") or "/bin/sh"
-        agent = a["command"]
+        return shell
+
+    def _agent_command(self) -> str:
+        agent = self.cfg["agent"]["command"]
+        if self._continue and shlex.split(agent)[0] == "claude":
+            agent += " --continue"
+        self._continue = False
+        return agent
+
+    def _build_argv(self, cls: str, with_theme: bool) -> list[str] | None:
+        a, t = self.cfg["agent"], self.cfg["terminal"]
+        shell = self._shell()
+        agent = self._agent_command()
         if shutil.which(shlex.split(agent)[0]) is None:
             warn(f"agent command '{agent}' not found on PATH")
         command = f"{agent}; exec {shell}" if a.get("keep_shell", True) else agent
-        subst = {"{theme}": t["theme"], "{class}": TERM_CLASS, "{title}": "Claude Notch",
+        subst = {"{theme}": t["theme"], "{class}": cls, "{title}": "Claude Notch",
                  "{shell}": shell, "{command}": command}
-        argv = [subst.get(tok, tok) for tok in shlex.split(t["launch"])]
+        tokens = shlex.split(t["launch"])
+        if not with_theme:   # a free-standing window keeps the user's own terminal look
+            tokens = [tok for i, tok in enumerate(tokens)
+                      if tok != "{theme}" and not (tok.startswith("--config") and i + 1 < len(tokens) and tokens[i + 1] == "{theme}")]
+        argv = [subst.get(tok, tok) for tok in tokens]
         if shutil.which(argv[0]) is None:
             warn(f"terminal '{argv[0]}' not found — set [terminal].launch in {CONFIG_FILE}")
             self._notify("Claude Notch", f"Terminal '{argv[0]}' not found. Check your config.")
+            return None
+        return argv
+
+    def _launch_terminal(self) -> bool:
+        argv = self._build_argv(TERM_CLASS, with_theme=True)
+        if argv is None:
             return False
-        workdir = Path(os.path.expanduser(a["workdir"]))
-        if not workdir.is_dir():
-            workdir = HOME
-        log(f"launching terminal: {argv} in {workdir}")
-        self._proc = subprocess.Popen(argv, cwd=str(workdir), start_new_session=True,
+        log(f"launching terminal: {argv} in {self._workdir}")
+        self._proc = subprocess.Popen(argv, cwd=str(self._workdir), start_new_session=True,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
 
@@ -406,6 +510,127 @@ class Bridge(QObject):
         if self._chat:
             reveal(TERM_CLASS, int(self.T["fade_ms"]))
 
+    @Slot()
+    def raiseNotch(self) -> None:
+        raise_window(APP_ID)
+
+    @Slot()
+    def raiseTerminal(self) -> None:
+        if self._chat:
+            raise_window(TERM_CLASS)
+
+    # ── menu actions ────────────────────────────────────────────────────
+    @Slot()
+    def newSession(self) -> None:
+        self._restart_session(cont=False)
+
+    @Slot()
+    def continueSession(self) -> None:
+        self._restart_session(cont=True)
+
+    def _restart_session(self, cont: bool) -> None:
+        self._kill_terminal()
+        self._continue = cont
+        if self._chat:
+            QTimer.singleShot(250, self._show_terminal)
+        else:
+            QTimer.singleShot(250, self.show)
+
+    @Slot()
+    def openWindow(self) -> None:
+        argv = self._build_argv(WINDOW_CLASS, with_theme=False)
+        if argv:
+            subprocess.Popen(argv, cwd=str(self._workdir), start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @Property("QVariant", notify=settingsChanged)
+    def projects(self):
+        """The configured workdir first, then its sub-folders by recency."""
+        base = self._resolve_workdir(self.cfg["agent"]["workdir"])
+        items = [{"name": base.name or str(base), "path": str(base), "current": base == self._workdir}]
+        try:
+            subs = [p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")]
+            subs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            items += [{"name": p.name, "path": str(p), "current": p == self._workdir} for p in subs[:8]]
+        except Exception:                                # noqa: BLE001
+            pass
+        return items
+
+    @Slot(str)
+    def setProject(self, path: str) -> None:
+        self._workdir = self._resolve_workdir(path)
+        self.settingsChanged.emit()
+        self._restart_session(cont=False)
+
+    @Property("QVariant", notify=settingsChanged)
+    def outputs(self):
+        want = self.cfg["screen"]["name"]
+        return [{"name": o["name"], "label": o["name"] + (" (primary)" if o["primary"] else ""),
+                 "current": (want == "auto" and o["primary"]) or want == o["name"]}
+                for o in list_outputs()] + [{"name": "auto", "label": "auto", "current": want == "auto"}]
+
+    @Slot(str)
+    def setScreen(self, name: str) -> None:
+        set_config("screen", "name", name); self.restart()
+
+    @Property(int, notify=settingsChanged)
+    def panelWidth(self):
+        return int(self.L["width"])
+
+    @Slot(int)
+    def setWidth(self, px: int) -> None:
+        set_config("layout", "width", int(px)); self.restart()
+
+    @Property(bool, notify=settingsChanged)
+    def autostart(self):
+        return AUTOSTART_FILE.exists()
+
+    @Slot(bool)
+    def setAutostart(self, on: bool) -> None:
+        if on:
+            launcher = shutil.which("claude-notch") or str(HOME / ".local/bin/claude-notch")
+            AUTOSTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+            AUTOSTART_FILE.write_text("[Desktop Entry]\nType=Application\nName=Claude Notch\n"
+                                      "Comment=Claude Code usage notch on the screen edge\n"
+                                      f"Exec={launcher} start\nIcon=utilities-terminal\nTerminal=false\n"
+                                      "X-KDE-autostart-phase=2\n")
+        else:
+            AUTOSTART_FILE.unlink(missing_ok=True)
+        self.settingsChanged.emit()
+
+    @Property(str, notify=settingsChanged)
+    def languageSetting(self):
+        return self.cfg["ui"]["language_setting"]
+
+    @Slot(str)
+    def setLanguage(self, code: str) -> None:
+        set_config("ui", "language", code); self.restart()
+
+    @Slot()
+    def openConfig(self) -> None:
+        if not CONFIG_FILE.exists():
+            set_config("ui", "language", self.cfg["ui"]["language_setting"])
+        subprocess.Popen(["xdg-open", str(CONFIG_FILE)], start_new_session=True)
+
+    @Slot()
+    def openLog(self) -> None:
+        LOG_FILE.touch(exist_ok=True)
+        subprocess.Popen(["xdg-open", str(LOG_FILE)], start_new_session=True)
+
+    @Slot()
+    def openRepo(self) -> None:
+        subprocess.Popen(["xdg-open", REPO_URL], start_new_session=True)
+
+    @Property(str, constant=True)
+    def version(self):
+        return __version__
+
+    @Slot()
+    def restart(self) -> None:
+        """Replace the process in place: the D-Bus name is released with the old
+        image, the terminal (a separate process) keeps its session."""
+        QTimer.singleShot(0, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+
     @staticmethod
     def _notify(title: str, body: str) -> None:
         if shutil.which("notify-send"):
@@ -414,32 +639,26 @@ class Bridge(QObject):
     # ── own window ──────────────────────────────────────────────────────
     def attach_window(self, w) -> None:
         self._window = w
-        self.setExpanded(False)
+        if self._pending_rects is not None:
+            self.applyMask(self._pending_rects)
 
     def pin(self) -> None:
         gx, gy, gw, gh = self._geo
         place(APP_ID, gx + gw - self.L["width"], gy + (gh - self._win_h) // 2,
               self.L["width"], self._win_h)
 
-    @Slot(bool)
-    def setExpanded(self, expanded: bool) -> None:
-        """Input region: resting → only the sliver's hover zone; hovering → the
-        bubble and its details panel; chat → only the side strip (everything
-        else belongs to the terminal on top)."""
-        w = self._window
-        if w is None:
+    @Slot("QVariantList")
+    def applyMask(self, rects) -> None:
+        """Input region of the notch window, as a list of [x, y, w, h] computed
+        by QML from the current state (sliver / bubble / chat strip / orb / menu)."""
+        if self._window is None:
+            self._pending_rects = list(rects)
             return
-        L, W, H = self.L, self.L["width"], self._win_h
-        if self._chat:
-            region = QRegion(W - L["strip"], 0, L["strip"], H)
-        elif expanded:
-            hw = L["bubble_w"] + 10 + L["panel_w"] + 12
-            hh = max(L["bubble_h"], 200) + 60
-            region = QRegion(W - hw, (H - hh) // 2, hw, hh)
-        else:
-            hh = L["sliver_h"] + 28
-            region = QRegion(W - L["sliver_hot"], (H - hh) // 2, L["sliver_hot"], hh)
-        w.setMask(region)
+        region = QRegion()
+        for r in rects:
+            x, y, w, h = (int(v) for v in r)
+            region = region.united(QRegion(x, y, max(1, w), max(1, h)))
+        self._window.setMask(region)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
