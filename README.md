@@ -82,7 +82,7 @@ Each session writes its own record to `~/.cache/claude-notch-activity.json`; the
 
 ## The orb menu
 
-Below the notch sits a small arc — the **orb**. Hover it and it becomes a gear; click it (or run `claude-notch menu`) for the menu:
+Below the notch sits a small hook — the **orb**. Hover it and the hook curls up into a gear; click it (or run `claude-notch menu`) for the menu:
 
 | | |
 |---|---|

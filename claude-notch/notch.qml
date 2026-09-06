@@ -456,7 +456,7 @@ Window {
         }
     }
 
-    // ── the orb: an arc below the notch; a gear on hover; click → menu ──
+    // ── the orb: a ) hook below the notch that curls into a gear on hover; click → menu ──
     Item {
         id: orb
         readonly property int r: 22
@@ -471,59 +471,89 @@ Window {
         property real cy: win.chatVisual ? win.height - win.chatInset - 30 : (win.height + shape.sh) / 2 + 18
         Behavior on cx { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
 
-        x: cx - r - 4; y: cy - r - 4
-        width: 2 * r + 8; height: 2 * r + 8
+        x: cx - r - 10; y: cy - r - 10
+        width: 2 * r + 20; height: 2 * r + 20
         opacity: win.orbVisible ? 1 : 0
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 140 } }
         property bool hot: orbHover.hovered || win.menuOpen
+        // 0 = the ) hook, 1 = the gear. The hook curls up into the gear: it rounds
+        // off, winds around into a full ring while shrinking toward the gear's
+        // spot, then the teeth grow out of the ring with a small twist.
+        property real morph: hot ? 1 : 0
+        Behavior on morph { NumberAnimation { duration: 420; easing.type: Easing.InOutCubic } }
 
         Canvas {
             id: orbCv
             anchors.fill: parent
             onPaint: {
                 var ctx = getContext("2d"); ctx.reset()
-                var cx = width / 2, cy = height / 2
-                if (orb.hot) {
-                    // The gear sits on the hook: its rim follows the ) curve. Centre on the
-                    // curve's midpoint normal, one radius toward the concave side.
-                    var R = orb.r * 0.5
-                    var g0 = 6, Wx0 = win.width - orb.x, bb0 = (win.height + shape.sh) / 2 - orb.y, cr0 = shape.crad
-                    var mx = Wx0 - g0 - 0.25 * cr0, my = bb0 + g0 + 0.25 * cr0
-                    var sft = (R + 2) / Math.SQRT2
-                    cx = mx - sft; cy = my + sft
-                    ctx.fillStyle = pal.background
-                    ctx.beginPath(); ctx.arc(cx, cy, R + 2, 0, 2 * Math.PI); ctx.fill()
-                    ctx.strokeStyle = "#ebebf0"; ctx.lineCap = "round"
-                    ctx.lineWidth = R * 0.26
-                    ctx.beginPath(); ctx.arc(cx, cy, R * 0.40, 0, 2 * Math.PI); ctx.stroke()
-                    for (var i = 0; i < 8; i++) {          // gear teeth
-                        var a = i * Math.PI / 4
+                var t = orb.morph
+                function clamp(v) { return Math.max(0, Math.min(1, v)) }
+                function lerp(a, b, k) { return a + (b - a) * k }
+                var g = 6
+                var Wx = win.width - orb.x                          // screen edge, local
+                var bb = (win.height + shape.sh) / 2 - orb.y        // shape bottom, local
+                var cr = shape.crad
+                var R = orb.r * 0.5                                 // gear radius
+                // the hook: the shape's bottom inverted corner, offset outward by g
+                var P0x = Wx - cr - g, P0y = bb + g, P1x = Wx - g, P1y = bb + g, P2x = Wx - g, P2y = bb + cr + g
+                var hcx = Wx - cr - g, hcy = bb + cr + g, hr = cr + g      // its circle
+                // the gear: rim on the hook curve, centred one radius toward the concave side
+                var mx = Wx - g - 0.25 * cr, my = bb + g + 0.25 * cr
+                var sft = (R + 2) / Math.SQRT2
+                var gcx = mx - sft, gcy = my + sft, gr = R * 0.40
+
+                var q = clamp(t / 0.25)                             // bezier hook → circular arc
+                var s = clamp((t - 0.1) / 0.9); s = s * s * (3 - 2 * s)   // curl, travel, shrink
+                var k = clamp((t - 0.62) / 0.38)                    // teeth
+                var ccx = lerp(hcx, gcx, s), ccy = lerp(hcy, gcy, s), rr = lerp(hr, gr, s)
+                var sweep = lerp(Math.PI / 2, 2 * Math.PI, s)
+                var lw = lerp(4.5, R * 0.26, s)
+
+                function path() {
+                    ctx.beginPath()
+                    var n = 28
+                    for (var i = 0; i <= n; i++) {
+                        var u = i / n, v = 1 - u
+                        var ax = ccx + rr * Math.cos(-Math.PI / 2 + u * sweep)
+                        var ay = ccy + rr * Math.sin(-Math.PI / 2 + u * sweep)
+                        var bx = v * v * P0x + 2 * v * u * P1x + u * u * P2x
+                        var by = v * v * P0y + 2 * v * u * P1y + u * u * P2y
+                        var x = lerp(bx, ax, q), y = lerp(by, ay, q)
+                        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+                    }
+                    if (s > 0.999) ctx.closePath()
+                }
+                ctx.lineCap = "round"; ctx.lineJoin = "round"
+                // The curl stays a dark stroke over the desktop; only once the ring is
+                // small and nearly closed does the disc fill in and the stroke turn light.
+                var d = clamp((s - 0.55) / 0.45)
+                if (d > 0) {
+                    ctx.globalAlpha = d; ctx.fillStyle = pal.background
+                    ctx.beginPath(); ctx.arc(ccx, ccy, (R + 2) * d, 0, 2 * Math.PI); ctx.fill()
+                }
+                if (d < 1) {
+                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28 * (1 - d); ctx.lineWidth = lw + 3.5; path(); ctx.stroke()
+                }
+                ctx.lineWidth = lw
+                if (d < 1) { ctx.strokeStyle = pal.background; ctx.globalAlpha = (win.stale ? 0.6 : 1) * (1 - d); path(); ctx.stroke() }
+                if (d > 0) { ctx.strokeStyle = "#ebebf0"; ctx.globalAlpha = d; path(); ctx.stroke() }
+                // teeth grow out of the ring with a little twist
+                if (k > 0) {
+                    ctx.strokeStyle = "#ebebf0"; ctx.globalAlpha = 1; ctx.lineWidth = R * 0.26
+                    var twist = (1 - k) * 0.7
+                    for (var j = 0; j < 8; j++) {
+                        var a = j * Math.PI / 4 + twist
                         ctx.beginPath()
-                        ctx.moveTo(cx + Math.cos(a) * R * 0.62, cy + Math.sin(a) * R * 0.62)
-                        ctx.lineTo(cx + Math.cos(a) * R * 0.90, cy + Math.sin(a) * R * 0.90)
+                        ctx.moveTo(ccx + Math.cos(a) * R * 0.62, ccy + Math.sin(a) * R * 0.62)
+                        ctx.lineTo(ccx + Math.cos(a) * lerp(R * 0.62, R * 0.90, k), ccy + Math.sin(a) * lerp(R * 0.62, R * 0.90, k))
                         ctx.stroke()
                     }
-                } else {
-                    // The hook echoes the bubble's bottom inverted corner: the same
-                    // quadratic curve the shape uses, offset outward by a few pixels.
-                    var g = 6
-                    var Wx = win.width - orb.x                          // screen edge, local
-                    var bb = (win.height + shape.sh) / 2 - orb.y        // shape bottom, local
-                    var cr = shape.crad
-                    ctx.lineCap = "round"
-                    function hook() {
-                        ctx.beginPath()
-                        ctx.moveTo(Wx - cr - g, bb + g)
-                        ctx.quadraticCurveTo(Wx - g, bb + g, Wx - g, bb + cr + g)
-                        ctx.stroke()
-                    }
-                    ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 8; hook()
-                    ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.5; hook()
                 }
             }
         }
-        onHotChanged: orbCv.requestPaint()
+        onMorphChanged: orbCv.requestPaint()
         onCyChanged: orbCv.requestPaint()
         Connections { target: shape; function onShChanged() { orbCv.requestPaint() } function onCradChanged() { orbCv.requestPaint() } }
         Connections { target: win; function onStaleChanged() { orbCv.requestPaint() } }
