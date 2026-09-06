@@ -136,6 +136,21 @@ Window {
     readonly property string activity: bridge.activity
     readonly property bool busy: activity === "busy"
     readonly property bool waiting: activity === "waiting"
+    // Prstenec i procenta jedou přes animovanou ringPct: doroste z 0, přechází plynule.
+    property real ringPct: 0
+    onFiveHourChanged: ringPct = Math.max(0, fiveHour)
+    Behavior on ringPct { NumberAnimation { duration: 850; easing.type: Easing.OutCubic } }
+    onRingPctChanged: ring.requestPaint()
+
+    // Klidové dýchání — jemný pulz, ať notch žije i když se nic neděje.
+    property real breathe: 1
+    SequentialAnimation on breathe {
+        loops: Animation.Infinite
+        running: win.orbVisible && !win.busy && !win.waiting && !win.stale
+        NumberAnimation { to: 1.0;  duration: 1900; easing.type: Easing.InOutSine }
+        NumberAnimation { to: 0.72; duration: 1900; easing.type: Easing.InOutSine }
+    }
+
     property real spin: 0
     NumberAnimation on spin { from: 0; to: 360; duration: 1400; loops: Animation.Infinite; running: win.busy }
     property real pulse: 1
@@ -207,12 +222,12 @@ Window {
         // No colour animation: the sliver tint switches to the dark fill the moment
         // the shape leaves sliver size, so nothing is ever drawn on a green bubble.
         property color col: win.grow > 0.03 ? pal.background : (win.waiting ? pal.warn : win.colorFor(win.fiveHour))
-        property real alpha: win.grow > 0.03 ? 1 : (win.waiting ? win.pulse : (win.stale ? 0.55 : 1))
+        property real alpha: win.grow > 0.03 ? 1 : (win.waiting ? win.pulse : (win.stale ? 0.55 : win.breathe))
 
-        Behavior on sw   { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
-        Behavior on sh   { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
-        Behavior on rad  { NumberAnimation { duration: 260; easing.type: Easing.OutQuad } }
-        Behavior on crad { NumberAnimation { duration: 260; easing.type: Easing.OutQuad } }
+        Behavior on sw   { NumberAnimation { duration: 360; easing.type: Easing.OutBack; easing.overshoot: 1.1 } }
+        Behavior on sh   { NumberAnimation { duration: 380; easing.type: Easing.OutBack; easing.overshoot: 1.25 } }
+        Behavior on rad  { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
+        Behavior on crad { NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 2.0 } }
         Behavior on alpha{ NumberAnimation { duration: 200 } }
 
         onSwChanged:    cv.requestPaint()
@@ -228,9 +243,9 @@ Window {
             onPaint: {
                 var ctx = getContext("2d"); ctx.reset()
                 var W = width
-                var x0 = W - shape.sw
-                var t  = (height - shape.sh) / 2
-                var b  = t + shape.sh
+                var x0 = Math.max(0, W - shape.sw)       // overshoot nesmi vyjet za okno
+                var t  = Math.max(0, (height - shape.sh) / 2)
+                var b  = Math.min(height, t + shape.sh)
                 var r  = Math.min(shape.rad, shape.sw / 2, shape.sh / 2)
                 var cr = Math.min(shape.crad, shape.sw)
 
@@ -272,9 +287,9 @@ Window {
 
         // Animate the flight only into the chat; on close snap, or the badge
         // would hang over the wallpaper while the shape is already collapsing.
-        Behavior on x     { enabled: win.chat; NumberAnimation { duration: 260; easing.type: Easing.OutQuint } }
-        Behavior on y     { enabled: win.chat; NumberAnimation { duration: 260; easing.type: Easing.OutQuint } }
-        Behavior on width { enabled: win.chat; NumberAnimation { duration: 260; easing.type: Easing.OutQuint } }
+        Behavior on x     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+        Behavior on y     { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+        Behavior on width { enabled: win.chat; NumberAnimation { duration: 320; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
 
         Item {
             id: ringBox
@@ -294,9 +309,9 @@ Window {
                     ctx.strokeStyle = "#2c2c2e"
                     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke()
                     if (win.fiveHour >= 0) {
-                        var f = Math.min(Math.max(win.fiveHour, 0), 100) / 100
+                        var f = Math.min(Math.max(win.ringPct, 0), 100) / 100
                         if (f > 0) {
-                            ctx.strokeStyle = win.colorFor(win.fiveHour)
+                            ctx.strokeStyle = win.colorFor(win.ringPct)
                             ctx.beginPath()
                             ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * f)
                             ctx.stroke()
@@ -342,7 +357,7 @@ Window {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: ringBox.bottom
             anchors.topMargin: 4
-            text: win.fiveHour >= 0 ? win.fiveHour + "%" : "–"
+            text: win.fiveHour >= 0 ? Math.round(win.ringPct) + "%" : "–"
             color: win.chatVisual ? "#8e8e93" : "#ffffff"
             opacity: win.stale ? 0.45 : 1
             font.pixelSize: win.chatVisual ? 10 : 16
