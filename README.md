@@ -4,9 +4,14 @@
 At rest it is a 5-pixel sliver coloured by how much of your plan you have used. Hover and it grows into a bubble with usage rings and reset times. Click and the bubble unfolds into a terminal running your agent — click the strip and it folds back.
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" alt="Chat panel unfolded from the notch" width="360">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/rest.png" alt="Resting sliver on the screen edge" width="120">
+  <img src="docs/screenshots/bubble.png" alt="Usage bubble with the details panel" width="440">
+</p>
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Chat panel unfolded from the notch" width="230">
+  &nbsp;
+  <img src="docs/screenshots/menu.png" alt="The orb menu" width="230">
+  &nbsp;
+  <img src="docs/screenshots/rest.png" alt="Resting sliver on the screen edge" width="42">
 </p>
 
 It is one shape the whole time — sliver → bubble → chat — morphing at 60 fps, with inverted corners where it meets the screen edge so it reads as carved into the display rather than parked on top of the wallpaper. Inspired by [Codenotch](https://github.com/vinzdg/codenotch) for macOS; built for Linux from scratch.
@@ -63,8 +68,6 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 The chat is a normal terminal window (`alacritty` with the shipped theme) running `claude` in `~/Projects`, dropping to your shell when the agent exits so the panel never closes under you. It keeps its session while folded — folding hides the window, it does not kill it.
 
 ## The orb menu
-
-<p align="center"><img src="docs/screenshots/menu.png" alt="The orb menu" width="240"></p>
 
 Below the notch sits a small arc — the **orb**. Hover it and it becomes a gear; click it (or run `claude-notch menu`) for the menu:
 

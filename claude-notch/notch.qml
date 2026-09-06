@@ -88,7 +88,7 @@ Window {
 
     onMenuOpenChanged: {
         if (menuOpen) { menuPage = "main"; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
-        else if (chat) bridge.raiseTerminal()
+        else { pointerWasInside = false; if (chat) bridge.raiseTerminal() }
         updateBubble()
     }
     Connections {
@@ -484,7 +484,14 @@ Window {
     // more — the main area, the orb or the menu — after a short debounce that
     // bridges the hand-over between them.
     readonly property bool pointerInside: mainArea.containsMouse || orbHover.hovered || menuHover.hovered
-    onPointerInsideChanged: if (pointerInside) leaveTimer.stop(); else leaveTimer.restart()
+    // Close on leave only once the pointer has actually been inside — so a menu
+    // opened programmatically (a shortcut, `claude-notch menu`) stays up until
+    // the user moves onto it and away again, instead of vanishing at once.
+    property bool pointerWasInside: false
+    onPointerInsideChanged: {
+        if (pointerInside) { pointerWasInside = true; leaveTimer.stop() }
+        else if (pointerWasInside) leaveTimer.restart()
+    }
     Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.pinInfo = false } }
 
     // ── the menu ─────────────────────────────────────────────────────
