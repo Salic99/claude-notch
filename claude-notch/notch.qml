@@ -89,7 +89,7 @@ Window {
             r.push([W - hw, (H - hh) / 2, hw, hh])
         } else r.push([W - lay.sliver_hot, (H - sliverH - 28) / 2, lay.sliver_hot, sliverH + 28])
         r.push([orb.targetCx - 18, orb.targetCy - 18, 36, 36])
-        if (menuOpen) r.push([menu.x - 6, menu.y - 6, menu.width + 12, menu.height + 12])
+        if (menuOpen) r.push([menu.x - 6, menu.y - 6, menu.width + 12, (orb.targetCy + 22) - menu.y + 6])   // down to the orb, no gap
         return r
     }
     onHotRectsChanged: bridge.applyMask(hotRects)
@@ -367,7 +367,7 @@ Window {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         onEntered: { if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true; bridge.reload() }
-        onExited:  { win.hover = false; win.suppressHover = false; win.menuOpen = false }
+        onExited:  { win.hover = false; win.suppressHover = false }
         onPositionChanged: if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true
         onClicked: {
             if (win.menuOpen) { win.menuOpen = false; return }
@@ -435,6 +435,23 @@ Window {
             onEntered: win.hover = false
             onClicked: win.menuOpen = !win.menuOpen
         }
+    }
+
+    // A cooperative hover handler sees the pointer anywhere in the window, even
+    // over MouseAreas that took hover from the big one. The menu closes only
+    // when the pointer has really left the window for a moment.
+    Item {
+        anchors.fill: parent
+        z: 1000
+        HoverHandler {
+            id: winHover
+            onHoveredChanged: if (hovered) leaveTimer.stop(); else leaveTimer.restart()
+        }
+    }
+    Timer {
+        id: leaveTimer
+        interval: 280
+        onTriggered: if (!winHover.hovered) { win.menuOpen = false; win.pinInfo = false }
     }
 
     // ── the menu ─────────────────────────────────────────────────────
