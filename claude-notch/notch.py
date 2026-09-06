@@ -430,6 +430,8 @@ class Bridge(QObject):
                            "terminal": self._terminal_running(),
                            "screen": self.cfg["screen"]["name"], "lang": self.cfg["ui"]["language"],
                            "geo": list(self._geo), "width": int(self.L["width"]),
+                           "usage_fiveHour": self._usage.get("fiveHour"),
+                           "usage_writtenAt": self._usage.get("writtenAt"),
                            "mask": getattr(self, "_mask_rects", None),
                            **getattr(self, "_ui_state", {})})
 
@@ -681,10 +683,6 @@ class Bridge(QObject):
         if self._chat:
             x, y, w, h = self._terminal_rect()
             place(TERM_CLASS, x, y, w, h, raise_it=True)
-
-    @Slot()
-    def reload(self) -> None:
-        self.reloadConfig()
 
     @Slot()
     def restart(self) -> None:      # alias kept for the menu and older callers
