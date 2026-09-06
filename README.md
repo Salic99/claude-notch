@@ -23,6 +23,7 @@ It is one shape the whole time — sliver → bubble → chat — morphing at 60
 | **Sliver** | green / amber / red by the current 5-hour window; dims when the feed is stale |
 | **Bubble** | starburst, usage ring, percentage; a details panel with both limit windows and their reset countdowns |
 | **Chat** | your agent in a terminal inside the container, with the ring parked in a side strip |
+| **Live activity** | a thin arc spins inside the ring while Claude is working; the ring — and the resting sliver — pulse amber while it waits on you (a permission prompt, a question) |
 
 The numbers come from Claude Code itself. Claude Code hands its status line a JSON blob that already contains `rate_limits.five_hour` and `rate_limits.seven_day` (with `resets_at`); a one-line hook snapshots that to `~/.cache/claude-usage.json`. **No OAuth token is read, no undocumented endpoint is called** — which also means the data refreshes only while a Claude Code session is running. In practice the chat panel *is* a running session.
 
@@ -66,6 +67,18 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
 
 The chat is a normal terminal window (`alacritty` with the shipped theme) running `claude` in `~/Projects`, dropping to your shell when the agent exits so the panel never closes under you. It keeps its session while folded — folding hides the window, it does not kill it.
+
+## Live activity
+
+The ring answers *"is it still working?"* Claude Code fires [hooks](https://code.claude.com/docs/en/hooks) at the turns of a session; the installer registers a tiny hook target (`claude-notch-activity`) for five of them:
+
+| Hook | State |
+|---|---|
+| `UserPromptSubmit`, `PreToolUse` | **busy** — a thin arc spins inside the ring |
+| `Notification` | **waiting** — the ring and the resting sliver pulse amber: Claude needs you |
+| `Stop`, `SessionEnd` | **idle** |
+
+Each session writes its own record to `~/.cache/claude-notch-activity.json`; the notch shows *waiting* if any session waits, else *busy* if any is busy. A *busy* older than 90 s counts as idle, in case a `Stop` hook never arrived. The hooks are appended to whatever you already have in `~/.claude/settings.json` (backed up first) and take effect for sessions started afterwards.
 
 ## The orb menu
 

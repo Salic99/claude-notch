@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Claude Code hook target: records session activity for the notch's live ring.
+# Wired by install.sh into ~/.claude/settings.json. Reads the hook JSON on stdin
+# (for session_id) and writes one line per session to ~/.cache/claude-notch-activity.json.
+#   claude-notch-activity <busy|idle|waiting>
+export LC_ALL=C.UTF-8
+state="${1:-idle}"
+dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+out="$dir/claude-notch-activity.json"
+sid=$(jq -r '.session_id // "?"' 2>/dev/null <<<"$(cat)")
+[ -z "$sid" ] && sid="?"
+tmp=$(mktemp "$out.XXXXXX") || exit 0
+# keep one record per session, replace this session's, drop entries older than 1 day
+jq -c --arg s "$sid" --arg st "$state" --argjson t "$(date +%s)" '
+  (. // {}) | .[$s] = {state: $st, at: $t}
+  | with_entries(select(.value.at > ($t - 86400)))
+' "$out" 2>/dev/null >"$tmp" || echo "{\"$sid\":{\"state\":\"$state\",\"at\":$(date +%s)}}" >"$tmp"
+mv -f "$tmp" "$out"

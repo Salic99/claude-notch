@@ -44,6 +44,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "claude
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 USAGE_FILE = CACHE_DIR / "claude-usage.json"
+ACTIVITY_FILE = CACHE_DIR / "claude-notch-activity.json"   # written by the hooks
 LOG_FILE = CACHE_DIR / "claude-notch.log"
 KWIN_SCRIPT = CACHE_DIR / "claude-notch-kwin.js"
 AUTOSTART_FILE = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "autostart" / "claude-notch.desktop"
@@ -326,6 +327,7 @@ class Bridge(QObject):
     chatOpenChanged = Signal()
     settingsChanged = Signal()
     geomChanged = Signal()
+    activityChanged = Signal()
     menuRequested = Signal()
     detailsRequested = Signal()
 
@@ -349,6 +351,14 @@ class Bridge(QObject):
         self._data_timer.timeout.connect(self.reload)
         self._data_timer.start(int(self.T["data_refresh_ms"]))
         self.reload()
+
+        # Session activity (busy / waiting / idle) from the Claude Code hooks —
+        # polled every second: it is a tiny file and drives a live animation.
+        self._activity = "idle"
+        self._act_timer = QTimer(self)
+        self._act_timer.timeout.connect(self._poll_activity)
+        self._act_timer.start(1000)
+        self._poll_activity()
 
     # ── usage feed ──────────────────────────────────────────────────────
     @staticmethod
@@ -379,6 +389,33 @@ class Bridge(QObject):
             log(f"usage feed unreadable ({e}); keeping empty")
         self._usage = d
         self.usageChanged.emit()
+
+    # ── session activity (from hooks) ───────────────────────────────────
+    @Property(str, notify=activityChanged)
+    def activity(self):
+        return self._activity
+
+    def _poll_activity(self) -> None:
+        """Aggregate all sessions: any fresh 'waiting' wins, then any fresh
+        'busy'; a 'busy' older than 90 s is treated as idle in case the Stop
+        hook never arrived."""
+        state = "idle"
+        try:
+            now = time.time()
+            for rec in (json.loads(ACTIVITY_FILE.read_text()) or {}).values():
+                st, at = rec.get("state"), rec.get("at", 0)
+                if st == "waiting" and now - at < 3600:
+                    state = "waiting"; break
+                if st == "busy" and now - at < 90:
+                    state = "busy"
+        except FileNotFoundError:
+            pass
+        except Exception as e:                           # noqa: BLE001
+            log(f"activity file unreadable ({e})")
+        if state != self._activity:
+            self._activity = state
+            log(f"activity -> {state}")
+            self.activityChanged.emit()
 
     # ── chat state ──────────────────────────────────────────────────────
     @Property(bool, notify=chatOpenChanged)
@@ -430,6 +467,7 @@ class Bridge(QObject):
                            "terminal": self._terminal_running(),
                            "screen": self.cfg["screen"]["name"], "lang": self.cfg["ui"]["language"],
                            "geo": list(self._geo), "width": int(self.L["width"]),
+                           "activity": self._activity,
                            "usage_fiveHour": self._usage.get("fiveHour"),
                            "usage_writtenAt": self._usage.get("writtenAt"),
                            "mask": getattr(self, "_mask_rects", None),

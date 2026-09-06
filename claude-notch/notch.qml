@@ -132,6 +132,20 @@ Window {
     }
     readonly property bool stale: fiveHour < 0 || (now - writtenAt) > cfg.timing.stale_after_s
 
+    // ── live session activity from the hooks: busy → spinning arc, waiting → amber pulse ──
+    readonly property string activity: bridge.activity
+    readonly property bool busy: activity === "busy"
+    readonly property bool waiting: activity === "waiting"
+    property real spin: 0
+    NumberAnimation on spin { from: 0; to: 360; duration: 1400; loops: Animation.Infinite; running: win.busy }
+    property real pulse: 1
+    SequentialAnimation on pulse {
+        loops: Animation.Infinite; running: win.waiting
+        NumberAnimation { to: 0.35; duration: 650; easing.type: Easing.InOutSine }
+        NumberAnimation { to: 1.0;  duration: 650; easing.type: Easing.InOutSine }
+    }
+    onActivityChanged: { actRing.requestPaint(); if (!waiting) pulse = 1 }
+
     function colorFor(v) {
         if (v < 0)  return pal.none
         if (v < 50) return pal.ok
@@ -192,8 +206,8 @@ Window {
         property real crad: win.chatVisual ? 26 : (win.showBubble ? 20 : 4)
         // No colour animation: the sliver tint switches to the dark fill the moment
         // the shape leaves sliver size, so nothing is ever drawn on a green bubble.
-        property color col: win.grow > 0.03 ? pal.background : win.colorFor(win.fiveHour)
-        property real alpha: (win.stale && !win.chatVisual && !win.showBubble) ? 0.55 : 1
+        property color col: win.grow > 0.03 ? pal.background : (win.waiting ? pal.warn : win.colorFor(win.fiveHour))
+        property real alpha: win.grow > 0.03 ? 1 : (win.waiting ? win.pulse : (win.stale ? 0.55 : 1))
 
         Behavior on sw   { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
         Behavior on sh   { NumberAnimation { duration: 300; easing.type: Easing.OutQuint } }
@@ -290,6 +304,32 @@ Window {
                     }
                 }
                 onWidthChanged: requestPaint()
+            }
+            Canvas {              // activity overlay: spinning arc (busy) / pulsing amber ring (waiting)
+                id: actRing
+                anchors.fill: parent
+                visible: win.busy || win.waiting
+                onPaint: {
+                    var ctx = getContext("2d"); ctx.reset()
+                    var cx = width / 2, cy = height / 2, lw = width * 0.085
+                    var r = width / 2 - lw / 2 - 1
+                    if (r <= 0) return
+                    ctx.lineCap = "round"
+                    if (win.waiting) {
+                        ctx.strokeStyle = pal.warn; ctx.globalAlpha = win.pulse; ctx.lineWidth = lw
+                        ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke()
+                    } else if (win.busy) {
+                        var a = win.spin * Math.PI / 180
+                        ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.9; ctx.lineWidth = lw * 0.55
+                        ctx.beginPath(); ctx.arc(cx, cy, r - lw * 1.15, a, a + Math.PI * 0.42); ctx.stroke()
+                    }
+                }
+                onWidthChanged: requestPaint()
+                Connections {
+                    target: win
+                    function onSpinChanged()  { if (win.busy) actRing.requestPaint() }
+                    function onPulseChanged() { if (win.waiting) actRing.requestPaint() }
+                }
             }
             Starburst {
                 anchors.centerIn: parent

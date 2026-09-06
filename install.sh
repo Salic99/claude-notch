@@ -48,6 +48,7 @@ mkdir -p "$APPDIR" "$BIN" "$CONF/claude-notch" "$CONF/autostart" "$DATA/applicat
 install -m 644 claude-notch/notch.py claude-notch/notch.qml "$APPDIR/"
 install -m 644 statusline/usage-feed.sh "$APPDIR/"
 install -m 755 bin/claude-notch "$BIN/claude-notch"
+install -m 755 bin/claude-notch-activity "$BIN/claude-notch-activity"
 install -m 644 config/alacritty.toml "$CONF/claude-notch/alacritty.toml"
 [[ -f "$CONF/claude-notch/config.toml" ]] || install -m 644 config/config.example.toml "$CONF/claude-notch/config.toml"
 rm -f "$APPDIR/place.js" "$APPDIR"/claude-notch-kwin-*.js 2>/dev/null || true
@@ -118,6 +119,22 @@ else
   if grep -qs 'usage-feed.sh' "$HOME/.claude/statusline.sh" 2>/dev/null; then ok "your status line already sources the feed"
   else warn "the notch needs the usage feed: rerun with --with-statusline, or add to your own status line script:"
        echo '        input=$(cat); source ~/.local/share/claude-notch/usage-feed.sh'; fi
+fi
+
+# Session activity hooks: the notch's ring spins while Claude works and pulses
+# amber while it waits on you. Appended to any hooks you already have.
+echo "Activity hooks"
+S="$HOME/.claude/settings.json"; mkdir -p "$HOME/.claude"; [[ -f $S ]] || echo '{}' > "$S"
+A="$BIN/claude-notch-activity"
+if grep -q 'claude-notch-activity' "$S"; then ok "hooks already present in settings.json"
+else
+  cp "$S" "$S.bak-claude-notch-hooks"
+  jq --arg a "$A" '
+    def add($ev; $st): .hooks[$ev] = ((.hooks[$ev] // []) + [{hooks: [{type: "command", command: ($a + " " + $st)}]}]);
+    .hooks = (.hooks // {})
+    | add("UserPromptSubmit"; "busy") | add("PreToolUse"; "busy")
+    | add("Stop"; "idle") | add("SessionEnd"; "idle") | add("Notification"; "waiting")
+  ' "$S.bak-claude-notch-hooks" > "$S" && ok "hooks added (UserPromptSubmit/PreToolUse → busy, Stop/SessionEnd → idle, Notification → waiting)"
 fi
 
 if (( WITH_PLASMOID )); then
