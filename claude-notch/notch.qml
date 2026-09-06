@@ -67,7 +67,10 @@ Window {
     property bool pinInfo: false           // "Show details" from the menu keeps the bubble open
     property bool menuOpen: false
     property string menuPage: "main"
-    readonly property bool showBubble: (hover || pinInfo) && !chat && !menuOpen
+    // The bubble stays while the pointer is on the orb or the menu is open.
+    readonly property bool showBubble: (hover || pinInfo || orbArea.containsMouse || menuOpen) && !chat
+    // The orb only exists together with the bubble (or the chat strip) — never on a bare desktop.
+    readonly property bool orbVisible: chat || showBubble
     // How far the shape has grown out of the sliver (0..1). Drives what may be visible:
     // nothing is ever drawn where there is no dark background underneath.
     readonly property real grow: Math.max(0, Math.min(1, (shape.sw - sliverW) / (bubbleW - sliverW)))
@@ -88,7 +91,7 @@ Window {
             var hw = bubbleW + 10 + panelW + 12, hh = Math.max(bubbleH, 200) + 60
             r.push([W - hw, (H - hh) / 2, hw, hh])
         } else r.push([W - lay.sliver_hot, (H - sliverH - 28) / 2, lay.sliver_hot, sliverH + 28])
-        r.push([orb.targetCx - 18, orb.targetCy - 18, 36, 36])
+        if (orbVisible) r.push([orb.targetCx - 18, orb.targetCy - 18, 36, 36])
         if (menuOpen) r.push([menu.x - 6, menu.y - 6, menu.width + 12, (orb.targetCy + 22) - menu.y + 6])   // down to the orb, no gap
         return r
     }
@@ -297,7 +300,7 @@ Window {
         color: pal.background
         anchors.verticalCenter: parent.verticalCenter
         x: win.width - win.bubbleW - 10 - width
-        readonly property bool ready: win.showBubble && win.grow > 0.6
+        readonly property bool ready: win.showBubble && !win.menuOpen && win.grow > 0.6
         opacity: ready ? 1 : 0
         visible: opacity > 0.01
         transform: Translate { x: info.ready ? 0 : 20
@@ -395,6 +398,9 @@ Window {
 
         x: cx - r - 4; y: cy - r - 4
         width: 2 * r + 8; height: 2 * r + 8
+        opacity: win.orbVisible ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: 140 } }
         property bool hot: orbArea.containsMouse || win.menuOpen
 
         Canvas {
@@ -419,9 +425,9 @@ Window {
                 } else {                                    // resting arc
                     ctx.lineCap = "round"
                     ctx.strokeStyle = "#ffffff"; ctx.globalAlpha = 0.28; ctx.lineWidth = 7
-                    ctx.beginPath(); ctx.arc(cx - 4, cy - 5, R - 1, Math.PI * 0.5, Math.PI * 1.2); ctx.stroke()   // ╰ hook toward the edge
+                    ctx.beginPath(); ctx.arc(cx - 6, cy + 3, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
                     ctx.strokeStyle = pal.background; ctx.globalAlpha = win.stale ? 0.6 : 1; ctx.lineWidth = 4.2
-                    ctx.beginPath(); ctx.arc(cx - 4, cy - 5, R - 1, Math.PI * 0.5, Math.PI * 1.2); ctx.stroke()   // ╰ hook toward the edge
+                    ctx.beginPath(); ctx.arc(cx - 6, cy + 3, R - 1, -Math.PI * 0.5, Math.PI * 0.12); ctx.stroke()   // ╮ hook: in from the left, down at the edge
                 }
             }
         }
@@ -432,7 +438,6 @@ Window {
             id: orbArea
             anchors.fill: parent
             hoverEnabled: true
-            onEntered: win.hover = false
             onClicked: win.menuOpen = !win.menuOpen
         }
     }
@@ -536,17 +541,27 @@ Window {
                         visible: modelData.sep === true
                         anchors.centerIn: parent; width: parent.width - 16; height: 1; color: Qt.rgba(1, 1, 1, 0.08)
                     }
+                    readonly property bool hot: itemArea.containsMouse && modelData.sep !== true && modelData.info !== true
                     Rectangle {      // hover highlight
                         anchors.fill: parent; radius: 10
-                        color: "#ffffff"; opacity: itemArea.containsMouse && modelData.sep !== true && modelData.info !== true ? 0.09 : 0
+                        color: "#ffffff"; opacity: parent.hot ? 0.16 : 0
+                        Behavior on opacity { NumberAnimation { duration: 90 } }
+                    }
+                    Rectangle {      // accent bar on the left
+                        x: 2; width: 3; radius: 1.5
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: parent.hot ? parent.height - 12 : 0
+                        color: win.colorFor(30)
+                        Behavior on height { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
                     }
                     Text {
                         visible: modelData.sep !== true
                         anchors.left: parent.left; anchors.leftMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.l || ""
-                        color: modelData.info === true ? "#8e8e93" : "#ebebf0"
+                        color: modelData.info === true ? "#8e8e93" : (parent.hot ? "#ffffff" : "#d8d8dc")
                         font.pixelSize: 13
+                        Behavior on color { ColorAnimation { duration: 90 } }
                     }
                     Text {
                         visible: modelData.sep !== true && (typeof modelData.sub === "string" || modelData.check === true)
