@@ -4,6 +4,9 @@
 At rest it is a 5-pixel sliver coloured by how much of your plan you have used. Hover and it grows into a bubble with usage rings and reset times. Click and the bubble unfolds into a terminal running your agent — click the strip and it folds back.
 
 <p align="center">
+  <img src="docs/screenshots/hero.png" alt="Claude Notch on a CachyOS desktop: the usage bubble with its details card on the left, the chat panel unfolded on the right" width="960">
+</p>
+<p align="center">
   <img src="docs/screenshots/bubble.png" alt="Usage bubble with the details panel" width="440">
 </p>
 <p align="center">
