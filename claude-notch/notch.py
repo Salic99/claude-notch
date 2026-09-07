@@ -286,6 +286,32 @@ workspace.windowList().forEach(function(win) {{
 """)
 
 
+def place_on_map(cls: str, x: int, y: int, w: int, h: int, *, fade_ms: int,
+                 timeout_ms: int = 20000) -> None:
+    """Catch a window the instant KWin maps it and put it in place before its
+    first frame is shown, so a freshly launched terminal never flashes at
+    KWin's default (centred) position. Also handles a window that mapped
+    before the script loaded. The hook disarms itself after timeout_ms."""
+    run_kwin(f"""
+var done = false;
+function grab(win) {{
+    if (done || !win || win.resourceClass !== "{cls}") return;
+    done = true;
+    {_PIN}
+    win.opacity = 0;
+    if (win.minimized) win.minimized = false;
+    win.frameGeometry = {{ x: {x}, y: {y}, width: {w}, height: {h} }};
+    {_RAISE}
+    {_fade_js(fade_ms)}
+}}
+workspace.windowAdded.connect(grab);
+workspace.windowList().forEach(grab);
+var stop = new QTimer(); stop.interval = {timeout_ms}; stop.singleShot = true;
+stop.timeout.connect(function() {{ workspace.windowAdded.disconnect(grab); }});
+stop.start();
+""")
+
+
 def reveal(cls: str, fade_ms: int) -> None:
     """Fade a parked window in. Called by QML the moment the container fully
     covers the terminal's rectangle, so the terminal never shows over the desktop."""
@@ -688,15 +714,19 @@ class Bridge(QObject):
             # the unfolding container covers this rectangle.
             place(TERM_CLASS, x, y, w, h, raise_it=True, hidden=True)
             return
+        # Arm KWin first: the fresh terminal is placed the moment it maps,
+        # before its first frame, instead of flashing at KWin's default
+        # position until a timer catches up (visible after a cold boot).
+        place_on_map(TERM_CLASS, x, y, w, h, fade_ms=fade)
         if not self._launch_terminal():
             self.hide()
             return
-        # A fresh terminal maps its window after the container has long finished
-        # unfolding, so it can fade in immediately; place it a few times in case
-        # of a slow start.
-        for ms in (1200, 2600, 5000):
+        # Belt and braces for a KWin that refused the hook: re-place a few
+        # times without touching opacity, so an already faded-in window
+        # does not blink.
+        for ms in (1500, 3000, 6000):
             QTimer.singleShot(ms, lambda: self._chat and place(
-                TERM_CLASS, x, y, w, h, raise_it=True, fade_ms=fade))
+                TERM_CLASS, x, y, w, h, raise_it=True))
 
     @Slot()
     def revealTerminal(self) -> None:
