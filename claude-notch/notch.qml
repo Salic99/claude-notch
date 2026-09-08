@@ -1070,7 +1070,7 @@ Window {
                 }
             }
 
-            // stop: only while the panel session is working — Escape into the agent
+            // stop: while the panel session works (Escape into the agent) or the notch talks (quiet)
             BarChip {
                 id: stopChip
                 anchors.verticalCenter: parent.verticalCenter
@@ -1078,9 +1078,9 @@ Window {
                 chevron: false
                 tint: pal.crit; strength: 0.04
                 visible: opacity > 0.01
-                opacity: win.busyHere ? 1 : 0
+                opacity: win.busyHere || bridge.speaking ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 160 } }
-                onTapped: bridge.interrupt()
+                onTapped: { if (bridge.speaking) bridge.speakStop(); if (win.busyHere) bridge.interrupt() }
             }
         }
     }

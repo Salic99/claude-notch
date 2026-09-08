@@ -777,7 +777,11 @@ class Bridge(QObject):
 
     @Slot()
     def micTapped(self) -> None:
-        """The mic in the bar: the conversation on/off, or one-shot dictation, by [voice].mode."""
+        """The mic in the bar: the conversation on/off, or one-shot dictation, by
+        [voice].mode. While the notch talks, a tap just quiets it."""
+        if self._speaking:
+            self.speakStop()
+            return
         if self._conv:
             self.talk()
         elif self.micMode == "conversation" and not self._voice_state:
@@ -978,6 +982,10 @@ class Bridge(QObject):
         """Toggle one-shot dictation: start recording; the next call stops it and
         types the transcript into the chat (no Enter, so it can be edited first).
         During a conversation it ends the conversation instead."""
+        if self._speaking:                               # the shortcut while it talks: quiet, first
+            self.speakStop()
+            if self._conv:
+                return
         if self._conv:
             self._conv_end()
             return

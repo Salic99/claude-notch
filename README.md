@@ -92,7 +92,7 @@ Under the terminal sits a bar — the chat's own controls, drawn by the notch ra
 | **project ▾** | the folder the chat runs in; pick another and a new session starts there (the configured workdir and its most recent sub-folders — the same list as the orb menu's *Project*) |
 | **model ▾** | the model the chat runs on; a pick types `/model <id>` into it. The list is `[agent].models` in `config.toml` |
 | **◔ 28 % context** | how full the session's context window is, in the ring's colours |
-| **Stop** | shows while the chat is working; sends Escape, which stops the running turn |
+| **Stop** | shows while the chat is working (sends Escape, which stops the running turn) and while the notch reads an answer aloud (quiets it) |
 
 The model, context and Stop belong to *this* chat's session, not to whichever Claude Code session wrote the feed last: the notch starts the panel's agent with `CLAUDE_NOTCH_PANEL` set, and the feed keeps a separate snapshot for it (`~/.cache/claude-notch-panel.json`). Sessions started before that flag existed fall back to the shared feed.
 
@@ -129,7 +129,7 @@ The microphone is the system default unless you pick one in the orb menu (*Setti
 
 ### Speech
 
-Turn the speaker on and Claude reads every answer of the chat aloud as soon as it finishes — the plain sentences of it: code blocks, tables and link targets are left out, and a long answer stops at a sentence end after `[speech].max_chars`. While it talks the speaker's waves breathe; a click stops it. When Claude waits on you (a permission prompt, a question), it says so. Nothing leaves the machine: [piper](https://github.com/OHF-Voice/piper1-gpl) synthesizes, PipeWire plays.
+Turn the speaker on and Claude reads every answer of the chat aloud as soon as it finishes — the plain sentences of it: code blocks, tables and link targets are left out, and a long answer stops at a sentence end after `[speech].max_chars`. While it talks the speaker's waves breathe; **Stop** in the bar, a click on the speaker or the mic, the voice shortcut, or `claude-notch speech stop` quiets it. When Claude waits on you (a permission prompt, a question), it says so. Nothing leaves the machine: [piper](https://github.com/OHF-Voice/piper1-gpl) synthesizes, PipeWire plays.
 
 ```sh
 uv tool install piper-tts                     # or pipx; puts `piper` in ~/.local/bin
