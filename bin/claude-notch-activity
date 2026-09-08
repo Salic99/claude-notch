@@ -16,9 +16,11 @@ sid=$(jq -r '.session_id // "?"' 2>/dev/null <<<"$input")
 # message of a notification. Fire-and-forget, the hook must not wait.
 if [ -n "${CLAUDE_NOTCH_PANEL:-}" ] && command -v qdbus6 >/dev/null; then
   event=$(jq -r '.hook_event_name // ""' 2>/dev/null <<<"$input")
+  printf '%s %s %s\n' "$(date +%T)" "$state" "$event" >> "$dir/claude-notch-hook.log"
   case "$event" in
     Stop) tp=$(jq -r '.transcript_path // ""' 2>/dev/null <<<"$input")
-          [ -n "$tp" ] && (qdbus6 org.claudenotch.Notch /Notch org.claudenotch.Notch.turnEnded "$tp" >/dev/null 2>&1 &) ;;
+          last=$(jq -r '.last_assistant_message // ""' 2>/dev/null <<<"$input")
+          [ -n "$tp$last" ] && (qdbus6 org.claudenotch.Notch /Notch org.claudenotch.Notch.turnEnded "$tp" "$last" >/dev/null 2>&1 &) ;;
     Notification) msg=$(jq -r '.message // ""' 2>/dev/null <<<"$input")
           [ -n "$msg" ] && (qdbus6 org.claudenotch.Notch /Notch org.claudenotch.Notch.notified "$msg" >/dev/null 2>&1 &) ;;
   esac

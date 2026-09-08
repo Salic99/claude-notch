@@ -653,6 +653,8 @@ class Bridge(QObject):
 
     @Slot()
     def quit(self) -> None:          # the chat (terminal + tmux session) outlives the notch
+        self._stop_recorder()        # … but not the microphone
+        self.speakStop()
         QGuiApplication.quit()
 
     # ── the "+" bar under the chat ───────────────────────────────────────
@@ -1176,14 +1178,28 @@ class Bridge(QObject):
             log(f"transcript unreadable ({e})")
         return text
 
-    @Slot(str)
-    def turnEnded(self, transcript_path: str) -> None:
-        """From the Stop hook of the panel session: read the answer aloud if speech is on."""
-        if not self.speechEnabled or not transcript_path:
+    @Slot(str, str)
+    def turnEnded(self, transcript_path: str, last_message: str = "") -> None:
+        """From the Stop hook of the panel session: read the answer aloud if speech
+        is on. The hook hands over the answer itself (last_assistant_message);
+        the transcript is the fallback for a Claude Code without that field."""
+        log(f"turn ended: {os.path.basename(transcript_path)}, {len(last_message)} chars")
+        if not self.speechEnabled:
             return
-        text = self._last_answer(Path(transcript_path))
+        if last_message.strip():
+            self.say(last_message)
+        elif transcript_path:
+            self._turn_read(Path(transcript_path), 0)
+
+    def _turn_read(self, transcript: Path, attempt: int) -> None:
+        # The hook may fire before the answer has reached the transcript; look again shortly.
+        text = self._last_answer(transcript)
         if text:
             self.say(text)
+        elif attempt < 6:
+            QTimer.singleShot(250, lambda: self._turn_read(transcript, attempt + 1))
+        else:
+            log("turn ended: no answer text found in the transcript")
 
     @Slot(str)
     def notified(self, message: str) -> None:
@@ -1266,6 +1282,9 @@ class Bridge(QObject):
                            "screen": self.cfg["screen"]["name"], "lang": self.cfg["ui"]["language"],
                            "geo": list(self._geo), "width": int(self.L["width"]),
                            "activity": self._activity,
+                           "panelActivity": self._panel_activity, "panelSession": self._usage.get("panelSession"),
+                           "voiceState": self._voice_state, "conversation": self._conv, "speaking": self._speaking,
+                           "speech": self.speechEnabled,
                            "usage_fiveHour": self._usage.get("fiveHour"),
                            "usage_writtenAt": self._usage.get("writtenAt"),
                            "mask": getattr(self, "_mask_rects", None),
