@@ -813,7 +813,9 @@ class Bridge(QObject):
         log("conversation: off")
 
     def _panel_busy(self) -> bool:
-        return (self._panel_activity or self._activity) == "busy"
+        # Only the panel's own session counts: another session's work must not
+        # silence the conversation. Unknown (no panel feed yet) means not busy.
+        return self._panel_activity == "busy"
 
     def _conv_tick(self, peak: float, now: float) -> None:
         V = self.cfg["voice"]
