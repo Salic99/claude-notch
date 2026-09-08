@@ -1,0 +1,16 @@
+# Claude Notch — XTTS v2 speech server (user service).
+#   install -Dm644 extras/xtts/claude-notch-xtts.service ~/.config/systemd/user/
+#   systemctl --user enable --now claude-notch-xtts
+[Unit]
+Description=Claude Notch XTTS v2 speech server
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/share/claude-notch/xtts/.venv/bin/python %h/.local/share/claude-notch/xtts/xtts-server.py
+Environment=COQUI_TOS_AGREED=1
+# Environment=XTTS_SPEAKER_WAV=%h/.local/share/claude-notch/voices/me.wav
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

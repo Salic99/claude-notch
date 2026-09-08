@@ -141,6 +141,19 @@ curl -LO $B/en/en_US/lessac/medium/en_US-lessac-medium.onnx -LO $B/en/en_US/less
 
 Any voice from [piper-voices](https://huggingface.co/rhasspy/piper-voices) works; `auto` picks a Czech voice when the answer has Czech diacritics, else one for the UI language. Piper streams straight into the player, so the first words come before the sentence is finished; `[speech].rate` sets the tempo. Prefer another engine? `[speech].synth` takes any command that turns `{text}` into an audio `{file}` — for instance Microsoft's neural voices through [edge-tts](https://github.com/rany2/edge-tts) (`uv tool install edge-tts`; online, the text leaves your machine): `synth = "edge-tts --voice cs-CZ-AntoninNeural --text {text} --write-media {file}"`. The Stop hook of the panel's session hands the notch the transcript path; that is how it knows what was said (`claude-notch say "…"` speaks anything).
 
+#### A local neural voice: XTTS v2
+
+Want the quality of the cloud voices without the cloud — or your own voice? `extras/xtts/` runs Coqui's [XTTS v2](https://huggingface.co/coqui/XTTS-v2) as a small local server (17 languages, Czech included; clones a voice from 6 s of audio). It needs a GPU with ~3 GB free and about 5 GB on disk:
+
+```sh
+X=~/.local/share/claude-notch/xtts && mkdir -p $X && cd $X
+uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python "coqui-tts[codec]" "transformers<5" torch torchaudio
+install -m 644 extras/xtts/xtts-server.py $X/ && install -Dm644 extras/xtts/claude-notch-xtts.service ~/.config/systemd/user/
+systemctl --user enable --now claude-notch-xtts       # downloads the model (~1.9 GB) on first start
+```
+
+Then in `config.toml`: `[speech] synth = "curl -sG http://127.0.0.1:5117/say --data-urlencode text={text} -o {file}"`. Add `--data-urlencode speed=1.2` to hurry it, `--data-urlencode speaker=Ana%20Florence` for another of the built-in speakers (the server lists a few in its journal), or set `XTTS_SPEAKER_WAV` in the service to a recording of the voice you want. Non-commercial use only (Coqui Public Model License). Piper stays the fallback: an empty `synth` brings it back.
+
 ## Live activity
 
 The ring answers *"is it still working?"* Claude Code fires [hooks](https://code.claude.com/docs/en/hooks) at the turns of a session; the installer registers a tiny hook target (`claude-notch-activity`) for five of them:

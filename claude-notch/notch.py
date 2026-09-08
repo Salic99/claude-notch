@@ -1163,6 +1163,18 @@ class Bridge(QObject):
         return t
 
     @staticmethod
+    def _sentences(text: str, min_chars: int = 60) -> list[str]:
+        """Split at sentence ends, joining short ones — one request per chunk."""
+        parts = [p.strip() for p in re.split(r"(?<=[.!?…:])\s+|\n+", text) if p.strip()]
+        out: list[str] = []
+        for p in parts:
+            if out and len(out[-1]) < min_chars:
+                out[-1] += " " + p
+            else:
+                out.append(p)
+        return out or [text]
+
+    @staticmethod
     def _last_answer(transcript: Path) -> str:
         """The text of the assistant's final message of the last turn in a Claude
         Code transcript (.jsonl). `user` records that only carry tool results do
@@ -1253,22 +1265,43 @@ class Bridge(QObject):
         def worker():
             ok = False
             try:
-                if custom:                               # another engine: writes a file, then it is played
-                    argv = [a.replace("{text}", speech).replace("{file}", str(wav)) for a in shlex.split(custom)]
-                    if shutil.which(argv[0]) is None and (HOME / ".local" / "bin" / argv[0]).is_file():
-                        argv[0] = str(HOME / ".local" / "bin" / argv[0])      # uv/pipx tools live there
-                    synth = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                             stderr=subprocess.PIPE, text=True)
-                    self._speech_procs.append(synth)
-                    _, err = synth.communicate(speech, timeout=120)
-                    if synth.returncode == 0 and wav.exists():
-                        play = [a.replace("{file}", str(wav)) for a in shlex.split(S["play"])]
+                if custom:                               # another engine: sentence by sentence, the next
+                    tmpl = shlex.split(custom)           # one synthesized while the previous one plays
+                    if shutil.which(tmpl[0]) is None and (HOME / ".local" / "bin" / tmpl[0]).is_file():
+                        tmpl[0] = str(HOME / ".local" / "bin" / tmpl[0])      # uv/pipx tools live there
+                    chunks = self._sentences(speech)
+                    files = [wav.with_name(f"say-{seq}-{i}.wav") for i in range(len(chunks))]
+
+                    def synth_start(i):
+                        argv = [a.replace("{text}", chunks[i]).replace("{file}", str(files[i])) for a in tmpl]
+                        pr = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.PIPE, text=True)
+                        self._speech_procs.append(pr)
+                        pr.stdin.write(chunks[i]); pr.stdin.close()
+                        return pr
+
+                    player, nxt = None, synth_start(0)
+                    for i in range(len(chunks)):
+                        synth = nxt
+                        err = synth.stderr.read(); synth.wait(timeout=120)
+                        if synth.returncode != 0 or not files[i].exists():
+                            if synth.returncode not in (0, -signal.SIGTERM):
+                                log(f"synth failed ({synth.returncode}): {err.strip()[-200:]}")
+                            break
+                        nxt = synth_start(i + 1) if i + 1 < len(chunks) else None
+                        if player is not None:
+                            player.wait()
+                        if seq != self._speech_seq:      # stopped meanwhile
+                            break
+                        play = [a.replace("{file}", str(files[i])) for a in shlex.split(S["play"])]
                         player = subprocess.Popen(play, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         self._speech_procs.append(player)
-                        player.wait()
+                    else:
                         ok = True
-                    elif synth.returncode not in (0, -signal.SIGTERM):
-                        log(f"synth failed ({synth.returncode}): {err.strip()[-200:]}")
+                    if player is not None:
+                        player.wait()
+                    for f in files:
+                        f.unlink(missing_ok=True)
                 else:                                    # piper streams raw samples straight into the player
                     play = [a.replace("{rate}", str(sr)) for a in shlex.split(S["play_raw"])]
                     synth = subprocess.Popen([piper, "-m", str(voice), "--output-raw", "--length-scale", f"{1 / rate:.3f}"],
