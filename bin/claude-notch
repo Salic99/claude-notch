@@ -29,7 +29,7 @@ start() {
 
 case "${1:-toggle}" in
   start)   start "${@:2}" ;;
-  toggle|show|hide|menu|plus|details|voice)
+  toggle|show|hide|menu|plus|details|voice|talk)
            running || start
            call "$1" ;;
   say)     running || start
@@ -51,6 +51,7 @@ case "${1:-toggle}" in
            sed -n '2p' "$0"; echo "  claude-notch start [-v]   start the notch (autostart does this at login)"
            echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
            echo "  claude-notch menu         open the orb menu"; echo "  claude-notch plus         open the + popup (files, folder, connectors, plugins)"
+           echo "  claude-notch talk         hands-free conversation on/off (what the mic in the bar does)"
            echo "  claude-notch voice        dictate: start recording / stop and type it into the chat"
            echo "  claude-notch bar <name>   open a bar popup: plus | project | model"
            echo "  claude-notch speech on|off|stop   read the chat's answers aloud (the speaker in the bar)"

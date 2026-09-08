@@ -42,7 +42,9 @@ Window {
               dropHint: "Drop to add to the conversation", model: "Model", stop: "Stop",
               context: "context", listening: "Listening… click the mic again to finish",
               transcribing: "Transcribing…", cancel: "Cancel", microphone: "Microphone",
-              micDefault: "System default", muted: "muted", speech: "Read answers aloud" },
+              micDefault: "System default", muted: "muted", speech: "Read answers aloud",
+              convListening: "Conversation — I'm listening", convHearing: "Conversation — go on…",
+              convPaused: "Conversation — Claude is answering", end: "End" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -57,7 +59,9 @@ Window {
               dropHint: "Pusť a přidá se do konverzace", model: "Model", stop: "Zastavit",
               context: "kontext", listening: "Poslouchám… dalším kliknutím na mikrofon ukončíš",
               transcribing: "Přepisuji…", cancel: "Zrušit", microphone: "Mikrofon",
-              micDefault: "Výchozí systémový", muted: "ztlumený", speech: "Předčítat odpovědi" }
+              micDefault: "Výchozí systémový", muted: "ztlumený", speech: "Předčítat odpovědi",
+              convListening: "Konverzace — poslouchám", convHearing: "Konverzace — slyším…",
+              convPaused: "Konverzace — Claude odpovídá", end: "Ukončit" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -854,12 +858,20 @@ Window {
             anchors.left: plusBtn.right; anchors.leftMargin: 6
             anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 28; radius: 14
-            readonly property bool rec: bridge.voiceState === "recording"
-            readonly property bool thinking: bridge.voiceState === "transcribing"
-            color: rec ? Qt.rgba(1, 0.27, 0.23, 0.22) : Qt.rgba(1, 1, 1, micHover.hovered ? 0.18 : 0.09)
-            border.color: rec ? Qt.rgba(1, 0.27, 0.23, 0.55) : Qt.rgba(1, 1, 1, 0.12); border.width: 1
+            readonly property string vs: bridge.voiceState
+            readonly property bool rec: vs === "recording" || vs === "hearing"
+            readonly property bool thinking: vs === "transcribing"
+            readonly property bool conv: bridge.conversation
+            readonly property bool listening: vs === "listening"
+            color: rec ? Qt.rgba(1, 0.27, 0.23, 0.22)
+                 : conv ? Qt.rgba(0.2, 0.84, 0.29, listening ? 0.16 : 0.08)
+                 : Qt.rgba(1, 1, 1, micHover.hovered ? 0.18 : 0.09)
+            border.color: rec ? Qt.rgba(1, 0.27, 0.23, 0.55) : conv ? Qt.rgba(0.2, 0.84, 0.29, listening ? 0.6 : 0.3)
+                                                                   : Qt.rgba(1, 1, 1, 0.12)
+            border.width: 1
             opacity: bridge.voiceReady ? 1 : 0.45
             Behavior on color { ColorAnimation { duration: 120 } }
+            Behavior on border.color { ColorAnimation { duration: 120 } }
             Rectangle {      // the halo breathes with the input level
                 anchors.centerIn: parent
                 width: parent.width + 4 + bridge.micLevel * 24; height: width; radius: width / 2
@@ -867,6 +879,19 @@ Window {
                 opacity: micBtn.rec ? 0.18 + bridge.micLevel * 0.5 : 0
                 Behavior on width { NumberAnimation { duration: 60 } }
                 Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+            Rectangle {      // conversation, listening: a slow green pulse
+                anchors.centerIn: parent
+                width: parent.width + 6; height: width; radius: width / 2
+                color: "transparent"; border.color: pal.ok; border.width: 1.5
+                property real k: 0
+                SequentialAnimation on k {
+                    running: micBtn.listening; loops: Animation.Infinite
+                    NumberAnimation { to: 1; duration: 1100; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 0; duration: 1100; easing.type: Easing.InOutSine }
+                }
+                opacity: micBtn.listening ? 0.15 + 0.35 * k : 0
+                Behavior on opacity { NumberAnimation { duration: 160 } }
             }
             Canvas {
                 id: micGlyph
@@ -897,7 +922,7 @@ Window {
                 }
             }
             HoverHandler { id: micHover }
-            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: bridge.voice() }
+            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: bridge.micTapped() }
             TapHandler { acceptedButtons: Qt.RightButton; onTapped: bridge.voiceCancel() }
         }
 
@@ -958,13 +983,16 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 text: drop.containsDrag ? (win.txt.dropHint || "")
                     : bridge.voiceState === "recording" ? (win.txt.listening || "")
+                    : bridge.voiceState === "listening" ? (win.txt.convListening || "")
+                    : bridge.voiceState === "hearing" ? (win.txt.convHearing || "")
+                    : bridge.voiceState === "paused" ? (win.txt.convPaused || "")
                     : bridge.voiceState === "transcribing" ? (win.txt.transcribing || "") : ""
                 color: "#ebebf0"; font.pixelSize: 12
             }
             BarChip {
                 anchors.verticalCenter: parent.verticalCenter
-                label: win.txt.cancel || ""; chevron: false; strength: 0.04
-                visible: bridge.voiceState === "recording"
+                label: (bridge.conversation ? win.txt.end : win.txt.cancel) || ""; chevron: false; strength: 0.04
+                visible: bridge.voiceState === "recording" || bridge.conversation
                 onTapped: bridge.voiceCancel()
             }
         }

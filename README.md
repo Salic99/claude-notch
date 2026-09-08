@@ -87,7 +87,7 @@ Under the terminal sits a bar — the chat's own controls, drawn by the notch ra
 | | |
 |---|---|
 | **+** | the popup below (or `claude-notch plus`) |
-| **mic** | dictation — see below (or `claude-notch voice`) |
+| **mic** | a hands-free conversation, or dictation — see below |
 | **speaker** | Claude reads its answers aloud — see *Speech* below (`claude-notch speech on\|off`) |
 | **project ▾** | the folder the chat runs in; pick another and a new session starts there (the configured workdir and its most recent sub-folders — the same list as the orb menu's *Project*) |
 | **model ▾** | the model the chat runs on; a pick types `/model <id>` into it. The list is `[agent].models` in `config.toml` |
@@ -108,9 +108,13 @@ The **+** popup:
 
 Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
 
+### Conversation
+
+Click the mic and just talk. When you pause (`[voice].silence_ms`, 0.9 s), what you said is transcribed and **sent**; Claude answers; the answer is read aloud (the speaker switches on for the conversation if it was off); then the mic listens again. While Claude works or talks the mic is deaf — it would otherwise hear the speakers — and the bar says so. A green pulse means it is listening, red means it hears you, **End** (or a click on the mic) ends the conversation. `claude-notch talk` toggles it from a shell. Two-second exchanges, entirely on your machine.
+
 ### Dictation
 
-Click the mic and talk; click it again and what you said is typed into the chat — without Enter, so you can fix a word or add to it before sending. The halo around the mic follows your voice; **Cancel** (or a right click on the mic) throws the recording away. `claude-notch voice` does the same toggle from a shell, and `./install.sh --voice-shortcut 'Meta+Shift+V'` binds a key to it, for push-to-talk without reaching for the mouse.
+With `[voice].mode = "dictation"` the mic does one-shot dictation instead (always available as `claude-notch voice`, or the key from `--voice-shortcut`): click the mic and talk; click it again and what you said is typed into the chat — without Enter, so you can fix a word or add to it before sending. The halo around the mic follows your voice; **Cancel** (or a right click on the mic) throws the recording away. `claude-notch voice` does the same toggle from a shell, and `./install.sh --voice-shortcut 'Meta+Shift+V'` binds a key to it, for push-to-talk without reaching for the mouse.
 
 Everything stays on your machine: PipeWire's `pw-record` captures 16 kHz mono, [whisper.cpp](https://github.com/ggml-org/whisper.cpp) transcribes it. Setup:
 

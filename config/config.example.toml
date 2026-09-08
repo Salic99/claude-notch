@@ -63,6 +63,10 @@ model = "auto"              # "auto" = the newest *.bin in that folder, or a pat
 language = "auto"           # whisper language code ("cs", "en", …); "auto" detects
 record = "pw-record --rate 16000 --channels 1 --format s16 {file}"   # 16 kHz mono s16 wav
 source = "auto"             # microphone: a PipeWire source name, or "auto" = the system default (orb menu › Settings › Microphone)
+mode = "conversation"       # the mic in the bar: "conversation" (hands-free, sends what you say, answers aloud) or "dictation"
+silence_ms = 900            # conversation: this much quiet ends what you were saying
+start_level = 0.05          # conversation: input peak (0–1) that counts as speech …
+end_level = 0.03            # … and below which it counts as quiet
 
 [speech]
 # Claude reads its answers aloud — the speaker in the bar. Needs piper (`uv tool install piper-tts`)

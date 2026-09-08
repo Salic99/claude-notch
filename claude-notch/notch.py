@@ -92,6 +92,13 @@ DEFAULTS = {
         "language": "auto",     # whisper language code; "auto" detects
         "record": "pw-record --rate 16000 --channels 1 --format s16 {file}",
         "source": "auto",       # PipeWire source (microphone) name; "auto" = the system default
+        # What the mic in the bar does: "conversation" — hands-free, each thing you say is
+        # transcribed and sent, the answer read aloud; "dictation" — click, talk, click, edit, send.
+        "mode": "conversation",
+        "silence_ms": 900,      # conversation: this much quiet ends what you were saying
+        "start_level": 0.05,    # conversation: input peak (0–1) that counts as speech …
+        "end_level": 0.03,      # … and below which it counts as quiet
+        "max_utterance_s": 30,
     },
     "speech": {                                 # Claude reads its answers aloud (the speaker in the bar)
         "enabled": False,
@@ -443,6 +450,7 @@ class Bridge(QObject):
     terminalShownChanged = Signal()
     speechChanged = Signal()
     _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
+    _convResult = Signal(str)              # the same, for the conversation
     _speechDone = Signal(bool)             # from the speech thread
 
     def __init__(self, cfg: dict):
@@ -488,6 +496,15 @@ class Bridge(QObject):
         self._level_timer.setInterval(50)
         self._level_timer.timeout.connect(self._poll_level)
         self._voiceResult.connect(self._voice_done)
+        self._convResult.connect(self._conv_result)
+        # Conversation: hands-free turns. Segments are cut out of the running
+        # recording by input level; the mic is deaf while Claude works or talks.
+        self._conv = False
+        self._conv_speech_on = False           # we switched speech on for the conversation
+        self._seg_start: int | None = None
+        self._speech_since = 0.0
+        self._silence_since = 0.0
+        self._loud_ticks = 0
         self._speechDone.connect(self._speech_finished)
 
         # Speech: the last answer of the panel session, read by piper.
@@ -748,6 +765,119 @@ class Bridge(QObject):
     def voiceReady(self):
         return self._voice_missing() is None
 
+    @Property(bool, notify=voiceChanged)
+    def conversation(self):
+        return self._conv
+
+    @Property(str, notify=settingsChanged)
+    def micMode(self):
+        return str(self.cfg["voice"].get("mode", "conversation") or "conversation")
+
+    @Slot()
+    def micTapped(self) -> None:
+        """The mic in the bar: the conversation on/off, or one-shot dictation, by [voice].mode."""
+        if self._conv:
+            self.talk()
+        elif self.micMode == "conversation" and not self._voice_state:
+            self.talk()
+        else:
+            self.voice()
+
+    @Slot()
+    def talk(self) -> None:
+        """Toggle the hands-free conversation (`claude-notch talk`)."""
+        if self._conv:
+            self._conv_end()
+            return
+        if self._voice_state:                            # a one-shot dictation is under way
+            return
+        if not self._start_recorder():
+            return
+        self._conv = True
+        self._seg_start = None
+        self._loud_ticks = 0
+        if not self.speechEnabled:                       # a conversation talks back
+            self._conv_speech_on = True
+            self.setSpeech(True)
+        self._set_voice("listening", 0.0)
+        log("conversation: on")
+
+    def _conv_end(self) -> None:
+        self._stop_recorder()
+        self._conv = False
+        self._seg_start = None
+        if self._conv_speech_on:
+            self._conv_speech_on = False
+            self.setSpeech(False)
+        self._set_voice("", 0.0)
+        log("conversation: off")
+
+    def _panel_busy(self) -> bool:
+        return (self._panel_activity or self._activity) == "busy"
+
+    def _conv_tick(self, peak: float, now: float) -> None:
+        V = self.cfg["voice"]
+        paused = self._speaking or self._panel_busy()
+        if self._voice_state == "transcribing":
+            return
+        if paused:
+            self._seg_start = None
+            self._loud_ticks = 0
+            if self._voice_state != "paused":
+                self._set_voice("paused")
+            return
+        if self._seg_start is None:
+            if self._voice_state != "listening":
+                self._set_voice("listening")
+            self._loud_ticks = self._loud_ticks + 1 if peak > float(V.get("start_level", 0.05)) else 0
+            if self._loud_ticks >= 2:                    # two ticks (100 ms) of sound: speech
+                pre = 16000 * 2 * 4 // 10                # 0.4 s before it
+                self._seg_start = max(44, self._rec_offset - pre)
+                self._speech_since, self._silence_since, self._loud_ticks = now, 0.0, 0
+                self._set_voice("hearing")
+            return
+        if peak > float(V.get("end_level", 0.03)):
+            self._silence_since = 0.0
+        elif not self._silence_since:
+            self._silence_since = now
+        quiet = self._silence_since and now - self._silence_since > int(V.get("silence_ms", 900)) / 1000
+        if quiet or now - self._speech_since > float(V.get("max_utterance_s", 30)):
+            start, end = self._seg_start, self._rec_offset
+            self._seg_start = None
+            if (end - start) / 32000 >= 0.7:
+                self._conv_transcribe(start, end)
+            else:
+                self._set_voice("listening")
+
+    def _conv_transcribe(self, start: int, end: int) -> None:
+        try:
+            with open(self._rec_file, "rb") as f:
+                f.seek(start)
+                data = f.read(end - start)
+        except OSError as e:
+            log(f"conversation: cannot read the recording ({e})")
+            self._set_voice("listening")
+            return
+        seg = self._rec_file.with_name("utterance.wav")
+        n = len(data)
+        header = (b"RIFF" + (36 + n).to_bytes(4, "little") + b"WAVEfmt " + (16).to_bytes(4, "little")
+                  + (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + (16000).to_bytes(4, "little")
+                  + (32000).to_bytes(4, "little") + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+                  + b"data" + n.to_bytes(4, "little"))
+        seg.write_bytes(header + data)
+        self._set_voice("transcribing")
+        self._transcribe(seg, self._convResult)
+
+    _HALLUCINATION = re.compile(r"^(you|thank you|thanks|děkuji|titulky.*|subtitles.*|amara\.org.*|[.…\s]*)[.!?\s]*$", re.I)
+
+    def _conv_result(self, text: str) -> None:
+        if not self._conv:
+            return
+        if text and not self._HALLUCINATION.match(text):
+            log(f"conversation: {len(text)} chars")
+            self._type(text, enter=True)
+        self._set_voice("listening")
+
     @Property("QVariant", notify=settingsChanged)
     def microphones(self):
         """PipeWire sources for the menu: the system default first, then each
@@ -817,19 +947,11 @@ class Bridge(QObject):
             self._voice_level = level
         self.voiceChanged.emit()
 
-    @Slot()
-    def voice(self) -> None:
-        """Toggle dictation: start recording; the next call stops it and types
-        the transcript into the chat (no Enter, so it can be edited first)."""
-        if self._voice_state == "recording":
-            self._voice_stop()
-            return
-        if self._voice_state:
-            return                                       # still transcribing
+    def _start_recorder(self) -> bool:
         missing = self._voice_missing()
         if missing:
             self._notify("Claude Notch", f"Dictation: {missing}.")
-            return
+            return False
         if not self._chat:
             self.show()
         out = CACHE_DIR / "claude-notch" / "voice"
@@ -842,11 +964,27 @@ class Bridge(QObject):
         except OSError as e:
             warn(f"cannot start the recorder {argv}: {e}")
             self._notify("Claude Notch", f"Dictation: cannot start {argv[0]}.")
-            return
+            return False
         self._rec_offset, self._voice_peak, self._rec_started = 44, 0.0, time.time()   # past the wav header
         self._level_timer.start()
-        self._set_voice("recording", 0.0)
-        log("dictation: recording")
+        return True
+
+    @Slot()
+    def voice(self) -> None:
+        """Toggle one-shot dictation: start recording; the next call stops it and
+        types the transcript into the chat (no Enter, so it can be edited first).
+        During a conversation it ends the conversation instead."""
+        if self._conv:
+            self._conv_end()
+            return
+        if self._voice_state == "recording":
+            self._voice_stop()
+            return
+        if self._voice_state:
+            return                                       # still transcribing
+        if self._start_recorder():
+            self._set_voice("recording", 0.0)
+            log("dictation: recording")
 
     def _poll_level(self) -> None:
         """Peak of the samples written since the last tick — drives the mic halo."""
@@ -858,7 +996,7 @@ class Bridge(QObject):
                 data = f.read()
         except OSError:
             data = b""
-        level = 0.0
+        level, peak = 0.0, 0.0
         n = len(data) // 2
         if n:
             self._rec_offset += n * 2
@@ -870,7 +1008,13 @@ class Bridge(QObject):
         self._voice_level = level if level > self._voice_level else self._voice_level * 0.75   # fast attack, slow release
         self.voiceChanged.emit()
         if self._rec.poll() is not None:                 # the recorder died under us
-            self._voice_stop()
+            if self._conv:
+                self._conv_end()
+            else:
+                self._voice_stop()
+            return
+        if self._conv:
+            self._conv_tick(peak, time.time())
 
     def _stop_recorder(self) -> None:
         self._level_timer.stop()
@@ -892,6 +1036,10 @@ class Bridge(QObject):
                 self._notify("Claude Notch", "Dictation: nothing heard. Pick the microphone in the orb menu: Settings › Microphone.")
             return
         self._set_voice("transcribing", 0.0)
+        self._transcribe(wav, self._voiceResult)
+
+    def _transcribe(self, wav: Path, done) -> None:
+        """whisper-cli on a wav, off the GUI thread; the text goes out through `done`."""
         model, lang = self._voice_model(), str(self.cfg["voice"].get("language", "auto") or "auto")
 
         def worker():
@@ -906,7 +1054,7 @@ class Bridge(QObject):
             except Exception as e:                       # noqa: BLE001
                 log(f"whisper-cli: {e}")
             text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", text)  # [BLANK_AUDIO], (music) …
-            self._voiceResult.emit(re.sub(r"\s+", " ", text).strip())
+            done.emit(re.sub(r"\s+", " ", text).strip())
         threading.Thread(target=worker, daemon=True).start()
 
     def _voice_done(self, text: str) -> None:
@@ -920,6 +1068,9 @@ class Bridge(QObject):
 
     @Slot()
     def voiceCancel(self) -> None:
+        if self._conv:
+            self._conv_end()
+            return
         if self._voice_state != "recording":
             return
         self._stop_recorder()
