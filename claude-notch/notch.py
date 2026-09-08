@@ -104,7 +104,12 @@ DEFAULTS = {
         "enabled": False,
         "voice": "auto",        # a piper voice name in VOICES_DIR (e.g. "cs_CZ-jirka-medium"); "auto" picks by language
         "max_chars": 700,       # longer answers are cut at a sentence end
+        "rate": 1.0,            # speaking speed; 1.2 = a fifth faster
         "piper": "piper",       # the piper CLI (uv tool install piper-tts)
+        "play_raw": "pw-play --raw --rate {rate} --channels 1 --format s16 -",   # piper streams into this
+        # Another engine instead of piper: a command that writes {file} from {text}
+        # (the text is also on stdin), e.g. edge-tts --voice cs-CZ-AntoninNeural --text {text} --write-media {file}
+        "synth": "",
         "play": "pw-play {file}",
     },
 }
@@ -1224,7 +1229,8 @@ class Bridge(QObject):
             self._notify("Claude Notch", "Speech needs piper (uv tool install piper-tts) and a voice in "
                          f"{VOICES_DIR} — see README: Speech.")
             return
-        speech = self._speakable(text, int(self.cfg["speech"].get("max_chars", 700)))
+        S = self.cfg["speech"]
+        speech = self._speakable(text, int(S.get("max_chars", 700)))
         if not speech:
             return
         self.speakStop()
@@ -1233,25 +1239,47 @@ class Bridge(QObject):
         out = CACHE_DIR / "claude-notch" / "speech"
         out.mkdir(parents=True, exist_ok=True)
         wav = out / f"say-{seq}.wav"
-        play = [a.replace("{file}", str(wav)) for a in shlex.split(self.cfg["speech"]["play"])]
+        custom = str(S.get("synth") or "").strip()
+        rate = max(0.5, min(2.0, float(S.get("rate", 1.0) or 1.0)))
+        sr = 22050
+        try:
+            sr = int((json.loads(voice.with_suffix(".onnx.json").read_text()).get("audio") or {}).get("sample_rate") or sr)
+        except Exception:                                # noqa: BLE001
+            pass
         self._speaking = True
         self.speechChanged.emit()
-        log(f"speech: {len(speech)} chars, {voice.stem}")
+        log(f"speech: {len(speech)} chars, {'custom' if custom else voice.stem}, rate {rate}")
 
         def worker():
             ok = False
             try:
-                synth = subprocess.Popen([piper, "-m", str(voice), "-f", str(wav)], stdin=subprocess.PIPE,
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-                self._speech_procs.append(synth)
-                _, err = synth.communicate(speech, timeout=120)
-                if synth.returncode == 0 and wav.exists():
-                    player = subprocess.Popen(play, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self._speech_procs.append(player)
+                if custom:                               # another engine: writes a file, then it is played
+                    argv = [a.replace("{text}", speech).replace("{file}", str(wav)) for a in shlex.split(custom)]
+                    synth = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.PIPE, text=True)
+                    self._speech_procs.append(synth)
+                    _, err = synth.communicate(speech, timeout=120)
+                    if synth.returncode == 0 and wav.exists():
+                        play = [a.replace("{file}", str(wav)) for a in shlex.split(S["play"])]
+                        player = subprocess.Popen(play, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self._speech_procs.append(player)
+                        player.wait()
+                        ok = True
+                    elif synth.returncode not in (0, -signal.SIGTERM):
+                        log(f"synth failed ({synth.returncode}): {err.strip()[-200:]}")
+                else:                                    # piper streams raw samples straight into the player
+                    play = [a.replace("{rate}", str(sr)) for a in shlex.split(S["play_raw"])]
+                    synth = subprocess.Popen([piper, "-m", str(voice), "--output-raw", "--length-scale", f"{1 / rate:.3f}"],
+                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+                    player = subprocess.Popen(play, stdin=synth.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._speech_procs += [synth, player]
+                    synth.stdout.close()                 # the player owns the pipe now
+                    synth.stdin.write(speech.encode()); synth.stdin.close()
+                    err = synth.stderr.read().decode(errors="replace"); synth.wait(timeout=120)
                     player.wait()
-                    ok = True
-                elif synth.returncode not in (0, -signal.SIGTERM):
-                    log(f"piper failed ({synth.returncode}): {err.strip()[-200:]}")
+                    ok = synth.returncode == 0
+                    if synth.returncode not in (0, -signal.SIGTERM):
+                        log(f"piper failed ({synth.returncode}): {err.strip()[-200:]}")
             except Exception as e:                       # noqa: BLE001
                 log(f"speech: {e}")
             finally:

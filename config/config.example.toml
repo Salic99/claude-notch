@@ -74,5 +74,10 @@ end_level = 0.03            # … and below which it counts as quiet
 enabled = false
 voice = "auto"              # a voice name from that folder, e.g. "cs_CZ-jirka-medium"; "auto" picks by language
 max_chars = 700             # longer answers are cut at a sentence end
-piper = "piper"             # the piper CLI
-play = "pw-play {file}"     # how to play the synthesized wav
+rate = 1.0                  # speaking speed; 1.2 = a fifth faster
+piper = "piper"             # the piper CLI; it streams into play_raw
+play_raw = "pw-play --raw --rate {rate} --channels 1 --format s16 -"
+# Another engine instead of piper: a command that writes {file} from {text} (text also on stdin), played with `play`.
+# e.g. Microsoft's neural voices via edge-tts (online): synth = "edge-tts --voice cs-CZ-AntoninNeural --text {text} --write-media {file}"
+synth = ""
+play = "pw-play {file}"

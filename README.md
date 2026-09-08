@@ -139,7 +139,7 @@ curl -LO $B/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx -LO $B/cs/cs_CZ/jirka/
 curl -LO $B/en/en_US/lessac/medium/en_US-lessac-medium.onnx -LO $B/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 ```
 
-Any voice from [piper-voices](https://huggingface.co/rhasspy/piper-voices) works; `auto` picks a Czech voice when the answer has Czech diacritics, else one for the UI language. The Stop hook of the panel's session hands the notch the transcript path; that is how it knows what was said (`claude-notch say "…"` speaks anything).
+Any voice from [piper-voices](https://huggingface.co/rhasspy/piper-voices) works; `auto` picks a Czech voice when the answer has Czech diacritics, else one for the UI language. Piper streams straight into the player, so the first words come before the sentence is finished; `[speech].rate` sets the tempo. Prefer another engine? `[speech].synth` takes any command that turns `{text}` into an audio `{file}` — for instance Microsoft's neural voices through [edge-tts](https://github.com/rany2/edge-tts) (`uv tool install edge-tts`; online, the text leaves your machine): `synth = "edge-tts --voice cs-CZ-AntoninNeural --text {text} --write-media {file}"`. The Stop hook of the panel's session hands the notch the transcript path; that is how it knows what was said (`claude-notch say "…"` speaks anything).
 
 ## Live activity
 
