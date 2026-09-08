@@ -39,7 +39,8 @@ Window {
               langSystem: "System", version: "Version", repo: "Project page",
               addFiles: "Add files or photos", addFolder: "Add folder", connectors: "Connectors",
               plugins: "Plugins", plusHint: "Add to the conversation", pasteImage: "Paste image from clipboard",
-              dropHint: "Drop to add to the conversation" },
+              dropHint: "Drop to add to the conversation", model: "Model", stop: "Stop",
+              context: "context" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -51,7 +52,8 @@ Window {
               langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu",
               addFiles: "Přidat soubory nebo fotky", addFolder: "Přidat složku", connectors: "Konektory",
               plugins: "Pluginy", plusHint: "Přidat do konverzace", pasteImage: "Vložit obrázek ze schránky",
-              dropHint: "Pusť a přidá se do konverzace" }
+              dropHint: "Pusť a přidá se do konverzace", model: "Model", stop: "Zastavit",
+              context: "kontext" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -59,13 +61,23 @@ Window {
     // The shape follows chatVisual: immediately on open, but on close only after
     // the terminal has faded out — otherwise it would stick out of the collapsing shape.
     property bool chatVisual: false
-    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else { collapseDelay.restart(); plusOpen = false }; updateBubble() }
-    // the "+" popup: like the menu it must sit above the terminal while open
-    property bool plusOpen: false
-    onPlusOpenChanged: {
-        if (plusOpen) { menuOpen = false; if (chat) bridge.raiseNotch() }
-        else if (chat && !menuOpen) bridge.raiseTerminal()
+    onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else { collapseDelay.restart(); barMenu = "" }; updateBubble() }
+    // The bar's popups ("plus", "project", "model"): like the menu they must sit
+    // above the terminal while open.
+    property string barMenu: ""
+    readonly property bool barMenuOpen: barMenu !== ""
+    onBarMenuChanged: {
+        if (barMenuOpen) { menuOpen = false; if (chat) bridge.raiseNotch() }
+        else { lingerHole(); if (chat && !menuOpen) bridge.raiseTerminal() }
     }
+    function toggleBarMenu(which) { barMenu = barMenu === which ? "" : which }
+    // While a popup is up the container leaves the terminal's rectangle open.
+    // Raising the terminal back goes through KWin (two D-Bus round trips), so
+    // the hole stays open a little longer — otherwise the container would
+    // paint over the terminal for those frames and the chat would blink.
+    property bool holeLinger: false
+    Timer { id: holeTimer; interval: 600; onTriggered: win.holeLinger = false }
+    function lingerHole() { holeLinger = true; holeTimer.restart() }
     Timer { id: collapseDelay; interval: cfg.timing.collapse_delay_ms; onTriggered: win.chatVisual = false }
 
     // The terminal is parked invisible at click time and revealed the instant the
@@ -100,14 +112,14 @@ Window {
     readonly property real grow: Math.max(0, Math.min(1, (shape.sw - sliverW) / (bubbleW - sliverW)))
 
     onMenuOpenChanged: {
-        if (menuOpen) { menuPage = "main"; plusOpen = false; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
-        else { pointerWasInside = false; if (chat && !plusOpen) bridge.raiseTerminal() }
+        if (menuOpen) { menuPage = "main"; barMenu = ""; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
+        else { pointerWasInside = false; lingerHole(); if (chat && !barMenuOpen) bridge.raiseTerminal() }
         updateBubble()
     }
     Connections {
         target: bridge
         function onMenuRequested() { win.menuOpen = !win.menuOpen }
-        function onPlusRequested() { win.plusOpen = !win.plusOpen }
+        function onPlusRequested() { win.toggleBarMenu("plus") }
         function onDetailsRequested() { win.pinInfo = !win.pinInfo }
     }
 
@@ -119,7 +131,8 @@ Window {
         if (chat) {
             r.push([W - stripW, 0, stripW, H])
             r.push([lay.pad, H - chatInset - lay.pad - barH, W - stripW - lay.pad, barH])
-            if (plusOpen) r.push([plusMenu.x - 6, plusMenu.y - 6, plusMenu.width + 12, plusMenu.height + 12])
+            var pop = activePopup()
+            if (pop) r.push([pop.x - 6, pop.y - 6, pop.width + 12, pop.height + 12])
         }
         else if (showBubble || pinInfo) {
             var hw = bubbleW + 10 + panelW + 12, hh = Math.max(bubbleH, 200) + 60
@@ -141,13 +154,22 @@ Window {
     property real sevenReset: 0
     property real writtenAt: 0
     property real now: Date.now() / 1000
+    property int  ctx: -1                  // the panel session's context window, % used
+    property string model: ""
+    // A pick in the bar shows at once; the feed confirms it on its next write.
+    property string modelOverride: ""
     readonly property var u: bridge.usage
     onUChanged: {
         fiveHour = u.fiveHour; sevenDay = u.sevenDay
         fiveReset = u.fiveReset; sevenReset = u.sevenReset
         writtenAt = u.writtenAt; now = Date.now() / 1000
+        ctx = u.ctx
+        if (u.model !== model) { model = u.model; modelOverride = "" }
         ring.requestPaint()
     }
+    // The bar's Stop follows the panel session when the feed can tell it apart,
+    // else whatever the ring shows.
+    readonly property bool busyHere: bridge.panelActivity === "busy" || (bridge.panelActivity === "" && busy)
     readonly property bool stale: fiveHour < 0 || (now - writtenAt) > cfg.timing.stale_after_s
 
     // ── live session activity from the hooks: busy → spinning arc, waiting → amber pulse ──
@@ -282,7 +304,7 @@ Window {
                 ctx.fill()
                 // While a popup holds the notch above the terminal, leave the
                 // terminal's rectangle open so it stays visible underneath.
-                if (win.chat && win.chatVisual && (win.menuOpen || win.plusOpen)) {
+                if (win.chat && win.chatVisual && (win.menuOpen || win.barMenuOpen || win.holeLinger)) {
                     var pad = lay.pad, ins = win.chatInset
                     ctx.clearRect(pad, ins + pad, W - win.stripW - pad, height - 2 * (ins + pad) - win.barH)
                 }
@@ -291,7 +313,8 @@ Window {
             onHeightChanged: requestPaint()
             Connections { target: win
                 function onMenuOpenChanged() { cv.requestPaint() }
-                function onPlusOpenChanged() { cv.requestPaint() }
+                function onBarMenuChanged() { cv.requestPaint() }
+                function onHoleLingerChanged() { cv.requestPaint() }
                 function onChatVisualChanged() { cv.requestPaint() } }
         }
     }
@@ -597,7 +620,7 @@ Window {
     // more — the main area, the orb or the menu — after a short debounce that
     // bridges the hand-over between them.
     readonly property bool pointerInside: mainArea.containsMouse || orbHover.hovered || menuHover.hovered
-                                          || barHover.hovered || plusHover.hovered || plusMenuHover.hovered
+                                          || barHover.hovered || plusPop.hovered || projectPop.hovered || modelPop.hovered
     // Close on leave only once the pointer has actually been inside — so a menu
     // opened programmatically (a shortcut, `claude-notch menu`) stays up until
     // the user moves onto it and away again, instead of vanishing at once.
@@ -606,7 +629,7 @@ Window {
         if (pointerInside) { pointerWasInside = true; leaveTimer.stop() }
         else if (pointerWasInside) leaveTimer.restart()
     }
-    Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.plusOpen = false; win.pinInfo = false } }
+    Timer { id: leaveTimer; interval: 150; onTriggered: if (!win.pointerInside) { win.menuOpen = false; win.barMenu = ""; win.pinInfo = false } }
 
     // ── the menu ─────────────────────────────────────────────────────
     function menuItems(page) {
@@ -749,7 +772,53 @@ Window {
         onDropped: (d) => { if (d.hasUrls) { bridge.add(d.urls.join("\n")); d.accept() } }
     }
 
-    // ── the "+" bar under the chat terminal: files, folder, connectors, plugins ──
+    // ── the bar under the chat terminal: +, project, model, context, stop ──
+    function activePopup() {
+        switch (barMenu) {
+        case "plus":    return plusPop
+        case "project": return projectPop
+        case "model":   return modelPop
+        }
+        return null
+    }
+
+    // a pill in the bar; `active` while its popup is up
+    component BarChip: Item {
+        id: chip
+        property string label
+        property bool chevron: true
+        property bool active: false
+        property color tint: "#d8d8dc"
+        property real strength: 0.06          // resting fill
+        signal tapped()
+        readonly property bool hot: chipHover.hovered || active
+        height: 26; width: chipRow.implicitWidth + 20
+        Rectangle {
+            anchors.fill: parent; radius: 13
+            color: Qt.rgba(1, 1, 1, chip.hot ? chip.strength + 0.09 : chip.strength)
+            border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
+            Behavior on color { ColorAnimation { duration: 90 } }
+        }
+        Row {
+            id: chipRow
+            anchors.centerIn: parent; spacing: 5
+            Text {
+                text: chip.label; color: chip.hot ? "#ffffff" : chip.tint
+                font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
+                Behavior on color { ColorAnimation { duration: 90 } }
+            }
+            Text {
+                visible: chip.chevron
+                text: "▾"; color: "#8e8e93"; font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+                rotation: chip.active ? 180 : 0
+                Behavior on rotation { NumberAnimation { duration: 180; easing.type: Easing.OutQuint } }
+            }
+        }
+        HoverHandler { id: chipHover }
+        TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: chip.tapped() }
+    }
+
     Item {
         id: plusBar
         x: lay.pad; width: win.width - win.stripW - lay.pad
@@ -764,63 +833,148 @@ Window {
             id: plusBtn
             x: 8; anchors.verticalCenter: parent.verticalCenter
             width: 28; height: 28; radius: 14
-            color: Qt.rgba(1, 1, 1, plusHover.hovered || win.plusOpen || drop.containsDrag ? 0.18 : 0.09)
+            color: Qt.rgba(1, 1, 1, plusHover.hovered || win.barMenu === "plus" || drop.containsDrag ? 0.18 : 0.09)
             border.color: Qt.rgba(1, 1, 1, 0.12); border.width: 1
             Behavior on color { ColorAnimation { duration: 90 } }
             Text {           // the + turns into an × while the popup is up
                 anchors.centerIn: parent; anchors.verticalCenterOffset: -1
                 text: "+"; color: "#ebebf0"; font.pixelSize: 21; font.weight: Font.Light
-                rotation: win.plusOpen ? 45 : 0
+                rotation: win.barMenu === "plus" ? 45 : 0
                 Behavior on rotation { NumberAnimation { duration: 220; easing.type: Easing.OutBack; easing.overshoot: 0.8 } }
             }
+            HoverHandler { id: plusHover }
+            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: win.toggleBarMenu("plus") }
         }
+        // While a file is being dragged over, the chips give way to the drop hint.
         Text {
             anchors.left: plusBtn.right; anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
-            text: (drop.containsDrag ? win.txt.dropHint : win.txt.plusHint) || ""
-            color: drop.containsDrag ? "#ebebf0" : "#7a7a80"; font.pixelSize: 12
-            opacity: (plusHover.hovered && !win.plusOpen) || drop.containsDrag ? 1 : 0
+            text: win.txt.dropHint || ""
+            color: "#ebebf0"; font.pixelSize: 12
+            opacity: drop.containsDrag ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 120 } }
         }
-        Item {
-            x: 0; y: 0; width: 44; height: parent.height
-            HoverHandler { id: plusHover }
-            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: win.plusOpen = !win.plusOpen }
+
+        // project: the folder the agent runs in — click to switch (new session there)
+        BarChip {
+            id: projectChip
+            anchors.left: plusBtn.right; anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            label: bridge.projectName
+            active: win.barMenu === "project"
+            opacity: drop.containsDrag ? 0 : 1
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+            onTapped: win.toggleBarMenu("project")
+        }
+
+        Row {
+            anchors.right: parent.right; anchors.rightMargin: 8
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 8
+            opacity: drop.containsDrag ? 0 : 1
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+
+            // model: what the panel session runs on — click to switch (`/model`)
+            BarChip {
+                id: modelChip
+                anchors.verticalCenter: parent.verticalCenter
+                label: win.modelOverride || win.model || win.txt.model || ""
+                active: win.barMenu === "model"
+                onTapped: win.toggleBarMenu("model")
+            }
+
+            // context window: a small arc in the ring's colours
+            Item {
+                id: ctxGauge
+                anchors.verticalCenter: parent.verticalCenter
+                width: ctxRow.implicitWidth; height: 26
+                visible: win.ctx >= 0
+                property real pct: 0
+                Behavior on pct { NumberAnimation { duration: 600; easing.type: Easing.OutCubic } }
+                Connections { target: win; function onCtxChanged() { ctxGauge.pct = Math.max(0, win.ctx) } }
+                Component.onCompleted: pct = Math.max(0, win.ctx)
+                onPctChanged: ctxArc.requestPaint()
+                Row {
+                    id: ctxRow
+                    anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                    Canvas {
+                        id: ctxArc
+                        width: 16; height: 16
+                        anchors.verticalCenter: parent.verticalCenter
+                        onPaint: {
+                            var c = getContext("2d"); c.reset()
+                            var cx = width / 2, cy = height / 2, lw = 2.6, r = width / 2 - lw / 2
+                            c.lineWidth = lw; c.lineCap = "round"
+                            c.strokeStyle = "#2c2c2e"
+                            c.beginPath(); c.arc(cx, cy, r, 0, 2 * Math.PI); c.stroke()
+                            var f = Math.min(ctxGauge.pct, 100) / 100
+                            if (f > 0) {
+                                c.strokeStyle = win.colorFor(ctxGauge.pct)
+                                c.beginPath(); c.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * f); c.stroke()
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: Math.round(ctxGauge.pct) + " %"
+                        color: "#a5a5aa"; font.pixelSize: 12
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: win.txt.context || ""
+                        color: "#6e6e73"; font.pixelSize: 11
+                    }
+                }
+            }
+
+            // stop: only while the panel session is working — Escape into the agent
+            BarChip {
+                id: stopChip
+                anchors.verticalCenter: parent.verticalCenter
+                label: "■  " + (win.txt.stop || "")
+                chevron: false
+                tint: pal.crit; strength: 0.04
+                visible: opacity > 0.01
+                opacity: win.busyHere ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 160 } }
+                onTapped: bridge.interrupt()
+            }
         }
     }
 
-    Rectangle {
-        id: plusMenu
-        width: 232
-        height: plusCol.implicitHeight + 12
+    // popups above the bar, one per chip
+    component BarPopup: Rectangle {
+        id: pop
+        property string which
+        property Item under                    // the chip it opens from
+        property var items: []                 // { l, check, a }
+        property alias hovered: popHover.hovered
+        readonly property bool open: win.barMenu === which
+        width: 240
+        height: popCol.implicitHeight + 12
         radius: 16
         color: pal.background
         border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
-        x: plusBar.x + 4
+        x: { open; var ax = under ? under.mapToItem(win, 0, 0).x - 4 : plusBar.x + 4
+             return Math.max(plusBar.x, Math.min(ax, plusBar.x + plusBar.width - width)) }
         y: plusBar.y - height - 4
-        opacity: win.plusOpen ? 1 : 0
+        opacity: open ? 1 : 0
         visible: opacity > 0.01
-        transform: Translate { y: win.plusOpen ? 0 : 8
+        transform: Translate { y: pop.open ? 0 : 8
                                Behavior on y { NumberAnimation { duration: 160; easing.type: Easing.OutQuint } } }
         Behavior on opacity { NumberAnimation { duration: 120 } }
-        HoverHandler { id: plusMenuHover }
+        HoverHandler { id: popHover }
 
         Column {
-            id: plusCol
+            id: popCol
             x: 6; y: 6
             width: parent.width - 12
             Repeater {
-                model: [
-                    { l: win.txt.addFiles,   a: function() { bridge.addFiles() } },
-                    { l: win.txt.addFolder,  a: function() { bridge.addFolder() } },
-                    { l: win.txt.pasteImage, a: function() { bridge.pasteImage() } },
-                    { l: win.txt.connectors, a: function() { bridge.sendCommand("/mcp") } },
-                    { l: win.txt.plugins,    a: function() { bridge.sendCommand("/plugin") } }
-                ]
+                model: pop.items
                 delegate: Item {
                     required property var modelData
-                    width: plusCol.width; height: 32
-                    readonly property bool hot: plusItemHover.hovered
+                    width: popCol.width; height: 32
+                    readonly property bool hot: popItemHover.hovered
                     Rectangle {
                         anchors.fill: parent; radius: 10
                         color: "#ffffff"; opacity: parent.hot ? 0.16 : 0
@@ -835,19 +989,52 @@ Window {
                     }
                     Text {
                         anchors.left: parent.left; anchors.leftMargin: 12
+                        anchors.right: parent.right; anchors.rightMargin: 30
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.l || ""
+                        elide: Text.ElideMiddle
                         color: parent.hot ? "#ffffff" : "#d8d8dc"
                         font.pixelSize: 13
                         Behavior on color { ColorAnimation { duration: 90 } }
                     }
-                    HoverHandler { id: plusItemHover }
+                    Text {
+                        visible: modelData.check === true
+                        anchors.right: parent.right; anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "✓"; color: win.colorFor(30); font.pixelSize: 13; font.bold: true
+                    }
+                    HoverHandler { id: popItemHover }
                     TapHandler {
                         gesturePolicy: TapHandler.ReleaseWithinBounds
-                        onTapped: { win.plusOpen = false; modelData.a() }
+                        onTapped: { win.barMenu = ""; modelData.a() }
                     }
                 }
             }
         }
+    }
+
+    BarPopup {
+        id: plusPop
+        which: "plus"; under: plusBtn
+        items: [
+            { l: win.txt.addFiles,   a: function() { bridge.addFiles() } },
+            { l: win.txt.addFolder,  a: function() { bridge.addFolder() } },
+            { l: win.txt.pasteImage, a: function() { bridge.pasteImage() } },
+            { l: win.txt.connectors, a: function() { bridge.sendCommand("/mcp") } },
+            { l: win.txt.plugins,    a: function() { bridge.sendCommand("/plugin") } }
+        ]
+    }
+    BarPopup {
+        id: projectPop
+        which: "project"; under: projectChip
+        items: bridge.projects.map(function(p) {
+            return { l: p.name, check: p.current, a: function() { bridge.setProject(p.path) } } })
+    }
+    BarPopup {
+        id: modelPop
+        which: "model"; under: modelChip
+        items: bridge.models.map(function(m) {
+            return { l: m.name, check: m.current,
+                     a: function() { win.modelOverride = m.name; bridge.setModel(m.id) } } })
     }
 }

@@ -68,7 +68,7 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | click the side strip | fold it back |
 | `claude-notch toggle` | the same, for shortcuts and scripts |
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
-| the **+** under the terminal | files, folder, clipboard image, `/mcp`, `/plugin` (`claude-notch plus`) |
+| the bar under the terminal | **+** (files, folder, clipboard image, `/mcp`, `/plugin` — `claude-notch plus`), the **project** and **model** pickers, the context gauge, **Stop** |
 | `claude-notch add <file>…` | mention files in the chat |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
@@ -77,9 +77,21 @@ The chat is a normal terminal window (`alacritty` with the shipped theme) runnin
 
 Inside the terminal the agent runs in a private **tmux** session (no prefix key, no status line — you will not notice it). That is what lets the panel type into the agent, and it means the session outlives the window: restart the notch, or even close the terminal window, and the next open reattaches to the same conversation. Set `[agent].tmux = false` to run the agent bare.
 
-### The + bar
+### The bar
 
-Under the terminal sits a **+**. Click it (or run `claude-notch plus`) for:
+Under the terminal sits a bar — the chat's own controls, drawn by the notch rather than the terminal:
+
+| | |
+|---|---|
+| **+** | the popup below (or `claude-notch plus`) |
+| **project ▾** | the folder the chat runs in; pick another and a new session starts there (the configured workdir and its most recent sub-folders — the same list as the orb menu's *Project*) |
+| **model ▾** | the model the chat runs on; a pick types `/model <id>` into it. The list is `[agent].models` in `config.toml` |
+| **◔ 28 % context** | how full the session's context window is, in the ring's colours |
+| **Stop** | shows while the chat is working; sends Escape, which stops the running turn |
+
+The model, context and Stop belong to *this* chat's session, not to whichever Claude Code session wrote the feed last: the notch starts the panel's agent with `CLAUDE_NOTCH_PANEL` set, and the feed keeps a separate snapshot for it (`~/.cache/claude-notch-panel.json`). Sessions started before that flag existed fall back to the shared feed.
+
+The **+** popup:
 
 | Item | What it types into the chat |
 |---|---|
@@ -89,7 +101,7 @@ Under the terminal sits a **+**. Click it (or run `claude-notch plus`) for:
 | Connectors | `/mcp` — Claude Code's MCP server dialog |
 | Plugins | `/plugin` — the plugin manager |
 
-Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the + bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
+Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
 
 ## Live activity
 

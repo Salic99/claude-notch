@@ -44,6 +44,7 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "claude
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 USAGE_FILE = CACHE_DIR / "claude-usage.json"
+PANEL_FILE = CACHE_DIR / "claude-notch-panel.json"   # the same feed, from the panel's own session
 ACTIVITY_FILE = CACHE_DIR / "claude-notch-activity.json"   # written by the hooks
 LOG_FILE = CACHE_DIR / "claude-notch.log"
 KWIN_SCRIPT = CACHE_DIR / "claude-notch-kwin.js"
@@ -64,7 +65,11 @@ DEFAULTS = {
         "theme": str(CONFIG_DIR / "alacritty.toml"),
     },
     "agent": {"command": "claude", "workdir": "~/Projects", "keep_shell": True,
-              "tmux": True},        # run the agent inside tmux so the + bar can type into it
+              "tmux": True,         # run the agent inside tmux so the bar can type into it
+              # the bar's model picker: [id, label]; picking one types `/model <id>`
+              "models": [["claude-fable-5-1", "Fable 5.1"], ["claude-opus-5", "Opus 5"],
+                         ["claude-sonnet-5", "Sonnet 5"], ["claude-haiku-4-5-20251001", "Haiku 4.5"],
+                         ["default", "Default"]]},
     "screen": {"name": "auto", "height_ratio": 0.94},
     "layout": {
         "width": 720, "strip": 46, "pad": 10, "inset": 26,
@@ -386,6 +391,7 @@ class Bridge(QObject):
         # Session activity (busy / waiting / idle) from the Claude Code hooks —
         # polled every second: it is a tiny file and drives a live animation.
         self._activity = "idle"
+        self._panel_activity = ""
         self._act_timer = QTimer(self)
         self._act_timer.timeout.connect(self._poll_activity)
         self._act_timer.start(1000)
@@ -395,7 +401,7 @@ class Bridge(QObject):
     @staticmethod
     def _empty() -> dict:
         return {"fiveHour": -1, "sevenDay": -1, "fiveReset": 0, "sevenReset": 0,
-                "writtenAt": 0, "model": "", "now": time.time()}
+                "writtenAt": 0, "model": "", "ctx": -1, "panelSession": "", "cwd": "", "now": time.time()}
 
     @Property("QVariant", notify=usageChanged)
     def usage(self):
@@ -404,6 +410,7 @@ class Bridge(QObject):
     @Slot()
     def reload(self) -> None:
         d = self._empty()
+        raw = {}
         try:
             raw = json.loads(USAGE_FILE.read_text())
             rl = raw.get("rate_limits") or {}
@@ -413,39 +420,86 @@ class Bridge(QObject):
             if "used_percentage" in sd:
                 d["sevenDay"] = round(sd["used_percentage"]); d["sevenReset"] = sd.get("resets_at", 0)
             d["writtenAt"] = raw.get("_at", 0)
-            d["model"] = (raw.get("model") or {}).get("display_name", "")
         except FileNotFoundError:
             log(f"no usage feed yet at {USAGE_FILE} — is the status line hook installed?")
         except Exception as e:                           # noqa: BLE001
             log(f"usage feed unreadable ({e}); keeping empty")
+        # Model and context are per session: prefer the panel's own snapshot
+        # (written while CLAUDE_NOTCH_PANEL is set) over whichever session wrote last.
+        src = raw
+        try:
+            panel = json.loads(PANEL_FILE.read_text())
+            if panel.get("session_id"):
+                src = panel; d["panelSession"] = panel["session_id"]; d["cwd"] = panel.get("cwd") or ""
+        except FileNotFoundError:
+            pass
+        except Exception as e:                           # noqa: BLE001
+            log(f"panel feed unreadable ({e})")
+        d["model"] = (src.get("model") or {}).get("display_name", "")
+        cw = src.get("context_window") or {}
+        if "used_percentage" in cw:
+            d["ctx"] = round(cw["used_percentage"])
         self._usage = d
         self.usageChanged.emit()
+
+    @Property("QVariant", notify=usageChanged)
+    def models(self):
+        """The bar's model picker, from [agent].models; the current one by the feed's display name."""
+        cur = self._usage.get("model", "")
+        out = []
+        for m in self.cfg["agent"].get("models") or []:
+            mid, name = (str(m[0]), str(m[1])) if isinstance(m, (list, tuple)) and len(m) > 1 else (str(m), str(m))
+            out.append({"id": mid, "name": name, "current": bool(cur) and cur in (name, mid)})
+        return out
+
+    @Slot(str)
+    def setModel(self, model_id: str) -> None:
+        self.sendCommand(f"/model {model_id}")
 
     # ── session activity (from hooks) ───────────────────────────────────
     @Property(str, notify=activityChanged)
     def activity(self):
         return self._activity
 
+    @Property(str, notify=activityChanged)
+    def panelActivity(self):
+        """The panel session's own state, "" while unknown (drives the bar's Stop)."""
+        return self._panel_activity
+
+    @staticmethod
+    def _fresh(rec: dict, now: float) -> str:
+        st, at = rec.get("state"), rec.get("at", 0)
+        if st == "waiting" and now - at < 3600:
+            return "waiting"
+        if st == "busy" and now - at < 90:
+            return "busy"
+        return "idle"
+
     def _poll_activity(self) -> None:
         """Aggregate all sessions: any fresh 'waiting' wins, then any fresh
         'busy'; a 'busy' older than 90 s is treated as idle in case the Stop
         hook never arrived."""
-        state = "idle"
+        state, here = "idle", ""
         try:
             now = time.time()
-            for rec in (json.loads(ACTIVITY_FILE.read_text()) or {}).values():
-                st, at = rec.get("state"), rec.get("at", 0)
-                if st == "waiting" and now - at < 3600:
+            recs = json.loads(ACTIVITY_FILE.read_text()) or {}
+            for rec in recs.values():
+                st = self._fresh(rec, now)
+                if st == "waiting":
                     state = "waiting"; break
-                if st == "busy" and now - at < 90:
+                if st == "busy":
                     state = "busy"
+            sid = self._usage.get("panelSession")
+            if sid and sid in recs:
+                here = self._fresh(recs[sid], now)
         except FileNotFoundError:
             pass
         except Exception as e:                           # noqa: BLE001
             log(f"activity file unreadable ({e})")
-        if state != self._activity:
-            self._activity = state
-            log(f"activity -> {state}")
+        if state != self._activity or here != self._panel_activity:
+            if state != self._activity:
+                log(f"activity -> {state}")
+            self._activity, self._panel_activity = state, here
             self.activityChanged.emit()
 
     # ── chat state ──────────────────────────────────────────────────────
@@ -523,6 +577,12 @@ class Bridge(QObject):
     def sendCommand(self, cmd: str) -> None:
         if self._type(cmd, enter=True):
             raise_window(TERM_CLASS)
+
+    @Slot()
+    def interrupt(self) -> None:
+        """Escape into the agent — Claude Code stops the running turn."""
+        if self._session_alive():
+            self._tmux("send-keys", "-t", TMUX_SESSION, "Escape")
 
     @Slot(str)
     def add(self, items: str) -> None:
@@ -702,6 +762,7 @@ class Bridge(QObject):
         # If the notch itself was (re)started from inside a Claude Code session,
         # do not let the panel's agent inherit that session's environment.
         env = {k: v for k, v in os.environ.items() if not (k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"))}
+        env["CLAUDE_NOTCH_PANEL"] = "1"       # the status line feed keys its panel snapshot on this
         self._proc = subprocess.Popen(argv, cwd=str(self._workdir), start_new_session=True, env=env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
@@ -754,6 +815,7 @@ class Bridge(QObject):
     def _restart_session(self, cont: bool) -> None:
         self._kill_terminal()
         self._kill_session()
+        PANEL_FILE.unlink(missing_ok=True)
         self._continue = cont
         if self._chat:
             QTimer.singleShot(250, self._show_terminal)
@@ -779,6 +841,14 @@ class Bridge(QObject):
         except Exception:                                # noqa: BLE001
             pass
         return items
+
+    @Property(str, notify=usageChanged)
+    def projectName(self):
+        """The bar's project chip: where the panel session actually runs (from
+        its feed), else the folder the next session will start in."""
+        cwd = self._usage.get("cwd") or ""
+        p = Path(cwd) if cwd else self._workdir
+        return p.name or str(p)
 
     @Slot(str)
     def setProject(self, path: str) -> None:
