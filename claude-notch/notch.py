@@ -1255,6 +1255,8 @@ class Bridge(QObject):
             try:
                 if custom:                               # another engine: writes a file, then it is played
                     argv = [a.replace("{text}", speech).replace("{file}", str(wav)) for a in shlex.split(custom)]
+                    if shutil.which(argv[0]) is None and (HOME / ".local" / "bin" / argv[0]).is_file():
+                        argv[0] = str(HOME / ".local" / "bin" / argv[0])      # uv/pipx tools live there
                     synth = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                              stderr=subprocess.PIPE, text=True)
                     self._speech_procs.append(synth)
