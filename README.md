@@ -152,7 +152,7 @@ install -m 644 extras/xtts/xtts-server.py $X/ && install -Dm644 extras/xtts/clau
 systemctl --user enable --now claude-notch-xtts       # downloads the model (~1.9 GB) on first start
 ```
 
-Then in `config.toml`: `[speech] synth = "curl -sG http://127.0.0.1:5117/say --data-urlencode text={text} -o {file}"`. Add `--data-urlencode speed=1.2` to hurry it, `--data-urlencode speaker=Ana%20Florence` for another of the built-in speakers (the server lists a few in its journal), or set `XTTS_SPEAKER_WAV` in the service to a recording of the voice you want. Non-commercial use only (Coqui Public Model License). Piper stays the fallback: an empty `synth` brings it back.
+Then in `config.toml`: `[speech] synth = "curl -sG http://127.0.0.1:5117/say --data-urlencode text={text} -o {file}"`. Add `--data-urlencode speed=1.2` to hurry it, `temperature=0.65` and `repetition_penalty=3` for a steadier delivery (the defaults are more expressive and more erratic), `--data-urlencode speaker=Ana%20Florence` for another of the built-in speakers (the server lists a few in its journal), or set `XTTS_SPEAKER_WAV` in the service to a recording of the voice you want. Non-commercial use only (Coqui Public Model License). Piper stays the fallback: an empty `synth` brings it back.
 
 ## Live activity
 

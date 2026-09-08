@@ -2,7 +2,9 @@
 """Claude Notch — a small local XTTS v2 server for the speech feature.
 
 Keeps Coqui's XTTS v2 loaded on the GPU and answers on 127.0.0.1:5117:
-    GET /say?text=…[&lang=cs|en|…][&speaker=Name|&speaker_wav=/path.wav][&speed=1.1]  → audio/wav
+    GET /say?text=…[&lang=cs|en|…][&speaker=Name|&speaker_wav=/path.wav][&speed=1.1]
+           [&temperature=0.65&repetition_penalty=2.5&top_p=0.85&top_k=50]           → audio/wav
+    (speaker_wav may be several paths joined with ":" — more reference audio, steadier clone)
     GET /health                                                                     → "ok"
 Point the notch at it:  [speech] synth = "curl -sG http://127.0.0.1:5117/say --data-urlencode text={text} -o {file}"
 
@@ -66,14 +68,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, b"text?")
         lang = q.get("lang") or ("cs" if CZECH.search(text) else "en")
         speaker_wav = q.get("speaker_wav") or SPEAKER_WAV
+        if ":" in speaker_wav:
+            speaker_wav = [w for w in speaker_wav.split(":") if w]
         speaker = q.get("speaker") or SPEAKER
         speed = float(q.get("speed") or SPEED)
+        # sampling: lower temperature = steadier, less expressive; repetition_penalty > 1 curbs stutters
+        tune = {k: float(q[k]) for k in ("temperature", "repetition_penalty", "top_p", "length_penalty") if q.get(k)}
+        if q.get("top_k"):
+            tune["top_k"] = int(q["top_k"])
         t0 = time.time()
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 out = f.name
             kw = {"speaker_wav": speaker_wav} if speaker_wav else {"speaker": speaker}
-            tts.tts_to_file(text=text, language=lang, file_path=out, speed=speed, split_sentences=True, **kw)
+            tts.tts_to_file(text=text, language=lang, file_path=out, speed=speed, split_sentences=True, **kw, **tune)
             with open(out, "rb") as f:
                 data = f.read()
             os.unlink(out)

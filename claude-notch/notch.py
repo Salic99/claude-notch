@@ -1284,6 +1284,8 @@ class Bridge(QObject):
                     for i in range(len(chunks)):
                         synth = nxt
                         err = synth.stderr.read(); synth.wait(timeout=120)
+                        if seq != self._speech_seq:      # stopped meanwhile
+                            break
                         if synth.returncode != 0 or not files[i].exists():
                             if synth.returncode not in (0, -signal.SIGTERM):
                                 log(f"synth failed ({synth.returncode}): {err.strip()[-200:]}")
@@ -1291,7 +1293,7 @@ class Bridge(QObject):
                         nxt = synth_start(i + 1) if i + 1 < len(chunks) else None
                         if player is not None:
                             player.wait()
-                        if seq != self._speech_seq:      # stopped meanwhile
+                        if seq != self._speech_seq:      # stopped while the last one played
                             break
                         play = [a.replace("{file}", str(files[i])) for a in shlex.split(S["play"])]
                         player = subprocess.Popen(play, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1330,6 +1332,7 @@ class Bridge(QObject):
 
     @Slot()
     def speakStop(self) -> None:
+        self._speech_seq += 1                            # whatever is under way is void now
         procs, self._speech_procs = self._speech_procs, []
         for pr in procs:
             if pr.poll() is None:
