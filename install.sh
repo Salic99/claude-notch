@@ -3,7 +3,8 @@
 # (optionally) the status line feed, the Plasma widget and the crash-to-agent extra.
 #
 #   ./install.sh [--with-statusline] [--with-plasmoid] [--with-crash-agent]
-#                [--shortcut "Meta+Ctrl+Shift+A"] [--plus-shortcut "Meta+Shift+A"] [--no-autostart] [--start]
+#                [--shortcut "Meta+Ctrl+Shift+A"] [--plus-shortcut "Meta+Shift+A"]
+#                [--voice-shortcut "Meta+Shift+V"] [--no-autostart] [--start]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
     --with-crash-agent) WITH_CRASH=1 ;;
     --shortcut)        SHORTCUT="${2:?}"; shift ;;
     --plus-shortcut)   PLUS_SHORTCUT="${2:?}"; shift ;;
+    --voice-shortcut)  VOICE_SHORTCUT="${2:?}"; shift ;;
     --no-autostart)    AUTOSTART=0 ;;
     --start)           START=1 ;;
     -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
@@ -45,6 +47,10 @@ command -v alacritty >/dev/null && ok "alacritty" || warn "alacritty not found �
 command -v claude >/dev/null && ok "claude" || warn "claude not on PATH — set [agent].command if your agent is called differently"
 command -v tmux >/dev/null && ok "tmux" || warn "tmux not found — the chat's + bar (files, folders, /mcp, /plugin) needs it: sudo pacman -S tmux"
 command -v wl-paste >/dev/null && ok "wl-clipboard" || warn "wl-clipboard not found — 'Paste image from clipboard' needs it: sudo pacman -S wl-clipboard"
+if command -v whisper-cli >/dev/null; then
+  if ls "$DATA/claude-notch/models"/*.bin >/dev/null 2>&1; then ok "whisper-cli + model (dictation)"
+  else warn "whisper-cli found but no model in $DATA/claude-notch/models/ — see README: Dictation"; fi
+else warn "whisper-cli not found — dictation (the mic in the bar) needs it: sudo pacman -S whisper-cpp ggml-vulkan"; fi
 
 echo "Installing files"
 mkdir -p "$APPDIR" "$BIN" "$CONF/claude-notch" "$CONF/autostart" "$DATA/applications"
@@ -81,11 +87,15 @@ Icon=utilities-terminal
 Terminal=false
 Categories=Development;Utility;
 Keywords=ai;agent;claude;notch;
-Actions=Plus;
+Actions=Plus;Voice;
 
 [Desktop Action Plus]
 Name=Add to the chat
 Exec=$BIN/claude-notch plus
+
+[Desktop Action Voice]
+Name=Dictate into the chat
+Exec=$BIN/claude-notch voice
 DESK
 update-desktop-database "$DATA/applications" 2>/dev/null || true
 ok "application entry (Claude Notch → toggle)"
@@ -113,6 +123,11 @@ if [[ -n ${PLUS_SHORTCUT:-} ]]; then
   kwriteconfig6 --file kglobalshortcutsrc --group services --group claude-notch.desktop \
     --key Plus "$PLUS_SHORTCUT,none,Add to the chat"
   ok "shortcut $PLUS_SHORTCUT → + popup (active after the next login)"
+fi
+if [[ -n ${VOICE_SHORTCUT:-} ]]; then
+  kwriteconfig6 --file kglobalshortcutsrc --group services --group claude-notch.desktop \
+    --key Voice "$VOICE_SHORTCUT,none,Dictate into the chat"
+  ok "shortcut $VOICE_SHORTCUT → dictation (active after the next login)"
 fi
 
 if (( WITH_STATUSLINE )); then

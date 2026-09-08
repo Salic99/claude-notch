@@ -40,7 +40,8 @@ Window {
               addFiles: "Add files or photos", addFolder: "Add folder", connectors: "Connectors",
               plugins: "Plugins", plusHint: "Add to the conversation", pasteImage: "Paste image from clipboard",
               dropHint: "Drop to add to the conversation", model: "Model", stop: "Stop",
-              context: "context" },
+              context: "context", listening: "Listening… click the mic again to finish",
+              transcribing: "Transcribing…", cancel: "Cancel" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -53,7 +54,8 @@ Window {
               addFiles: "Přidat soubory nebo fotky", addFolder: "Přidat složku", connectors: "Konektory",
               plugins: "Pluginy", plusHint: "Přidat do konverzace", pasteImage: "Vložit obrázek ze schránky",
               dropHint: "Pusť a přidá se do konverzace", model: "Model", stop: "Zastavit",
-              context: "kontext" }
+              context: "kontext", listening: "Poslouchám… dalším kliknutím na mikrofon ukončíš",
+              transcribing: "Přepisuji…", cancel: "Zrušit" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -120,6 +122,7 @@ Window {
         target: bridge
         function onMenuRequested() { win.menuOpen = !win.menuOpen }
         function onPlusRequested() { win.toggleBarMenu("plus") }
+        function onVoiceChanged() { micGlyph.requestPaint() }
         function onDetailsRequested() { win.pinInfo = !win.pinInfo }
     }
 
@@ -845,24 +848,84 @@ Window {
             HoverHandler { id: plusHover }
             TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: win.toggleBarMenu("plus") }
         }
-        // While a file is being dragged over, the chips give way to the drop hint.
-        Text {
-            anchors.left: plusBtn.right; anchors.leftMargin: 10
+        // the mic: click to dictate, click again to finish (right click cancels)
+        Rectangle {
+            id: micBtn
+            anchors.left: plusBtn.right; anchors.leftMargin: 6
             anchors.verticalCenter: parent.verticalCenter
-            text: win.txt.dropHint || ""
-            color: "#ebebf0"; font.pixelSize: 12
-            opacity: drop.containsDrag ? 1 : 0
+            width: 28; height: 28; radius: 14
+            readonly property bool rec: bridge.voiceState === "recording"
+            readonly property bool thinking: bridge.voiceState === "transcribing"
+            color: rec ? Qt.rgba(1, 0.27, 0.23, 0.22) : Qt.rgba(1, 1, 1, micHover.hovered ? 0.18 : 0.09)
+            border.color: rec ? Qt.rgba(1, 0.27, 0.23, 0.55) : Qt.rgba(1, 1, 1, 0.12); border.width: 1
+            opacity: bridge.voiceReady ? 1 : 0.45
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Rectangle {      // the halo breathes with the input level
+                anchors.centerIn: parent
+                width: parent.width + 4 + bridge.micLevel * 24; height: width; radius: width / 2
+                color: "transparent"; border.color: pal.crit; border.width: 1.5
+                opacity: micBtn.rec ? 0.18 + bridge.micLevel * 0.5 : 0
+                Behavior on width { NumberAnimation { duration: 60 } }
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+            Canvas {
+                id: micGlyph
+                anchors.centerIn: parent; width: 18; height: 18
+                RotationAnimation on rotation { running: micBtn.thinking; from: 0; to: 360; duration: 900; loops: Animation.Infinite }
+                onRotationChanged: if (!micBtn.thinking && rotation !== 0) rotation = 0
+                onPaint: {
+                    var c = getContext("2d"); c.reset()
+                    var cx = width / 2
+                    c.lineCap = "round"; c.lineWidth = 1.7
+                    if (micBtn.thinking) {           // a short arc, spun by the animation
+                        c.strokeStyle = "#ebebf0"
+                        c.beginPath(); c.arc(cx, height / 2, 6, 0, Math.PI * 0.6); c.stroke()
+                        return
+                    }
+                    var col = micBtn.rec ? pal.crit : "#ebebf0"
+                    c.strokeStyle = col; c.fillStyle = col
+                    c.beginPath(); c.roundedRect(cx - 2.5, 2, 5, 9, 2.5, 2.5); c.fill()          // capsule
+                    c.beginPath(); c.arc(cx, 8.5, 5, 0, Math.PI); c.stroke()                     // cradle
+                    c.beginPath(); c.moveTo(cx, 13.5); c.lineTo(cx, 16); c.stroke()             // stem
+                    c.beginPath(); c.moveTo(cx - 3.5, 16); c.lineTo(cx + 3.5, 16); c.stroke()   // base
+                }
+            }
+            HoverHandler { id: micHover }
+            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; onTapped: bridge.voice() }
+            TapHandler { acceptedButtons: Qt.RightButton; onTapped: bridge.voiceCancel() }
+        }
+
+        // While a file is dragged over, or dictation runs, the project chip gives way to a line of text.
+        readonly property bool aside: drop.containsDrag || bridge.voiceState !== ""
+        Row {
+            anchors.left: micBtn.right; anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 10
+            opacity: plusBar.aside ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 120 } }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: drop.containsDrag ? (win.txt.dropHint || "")
+                    : bridge.voiceState === "recording" ? (win.txt.listening || "")
+                    : bridge.voiceState === "transcribing" ? (win.txt.transcribing || "") : ""
+                color: "#ebebf0"; font.pixelSize: 12
+            }
+            BarChip {
+                anchors.verticalCenter: parent.verticalCenter
+                label: win.txt.cancel || ""; chevron: false; strength: 0.04
+                visible: bridge.voiceState === "recording"
+                onTapped: bridge.voiceCancel()
+            }
         }
 
         // project: the folder the agent runs in — click to switch (new session there)
         BarChip {
             id: projectChip
-            anchors.left: plusBtn.right; anchors.leftMargin: 10
+            anchors.left: micBtn.right; anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
             label: bridge.projectName
             active: win.barMenu === "project"
-            opacity: drop.containsDrag ? 0 : 1
+            opacity: plusBar.aside ? 0 : 1
             Behavior on opacity { NumberAnimation { duration: 120 } }
             onTapped: win.toggleBarMenu("project")
         }

@@ -38,6 +38,7 @@ The numbers come from Claude Code itself. Claude Code hands its status line a JS
 - a terminal — **alacritty** by default; kitty/foot/others via `[terminal].launch`
 - **tmux** (optional) — for the + bar under the chat and sessions that survive the panel
 - **wl-clipboard** (optional) — for *Paste image from clipboard*
+- **whisper-cpp** + a model (optional) — for dictation, the mic in the bar; `ggml-vulkan` runs it on the GPU
 - Claude Code with a plan that reports rate limits (Pro/Max); any other agent CLI works for the chat panel
 
 On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty tmux wl-clipboard`
@@ -68,7 +69,7 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | click the side strip | fold it back |
 | `claude-notch toggle` | the same, for shortcuts and scripts |
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
-| the bar under the terminal | **+** (files, folder, clipboard image, `/mcp`, `/plugin` — `claude-notch plus`), the **project** and **model** pickers, the context gauge, **Stop** |
+| the bar under the terminal | **+** (files, folder, clipboard image, `/mcp`, `/plugin` — `claude-notch plus`), the **mic** (`claude-notch voice`), the **project** and **model** pickers, the context gauge, **Stop** |
 | `claude-notch add <file>…` | mention files in the chat |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
@@ -84,6 +85,7 @@ Under the terminal sits a bar — the chat's own controls, drawn by the notch ra
 | | |
 |---|---|
 | **+** | the popup below (or `claude-notch plus`) |
+| **mic** | dictation — see below (or `claude-notch voice`) |
 | **project ▾** | the folder the chat runs in; pick another and a new session starts there (the configured workdir and its most recent sub-folders — the same list as the orb menu's *Project*) |
 | **model ▾** | the model the chat runs on; a pick types `/model <id>` into it. The list is `[agent].models` in `config.toml` |
 | **◔ 28 % context** | how full the session's context window is, in the ring's colours |
@@ -102,6 +104,21 @@ The **+** popup:
 | Plugins | `/plugin` — the plugin manager |
 
 Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
+
+### Dictation
+
+Click the mic and talk; click it again and what you said is typed into the chat — without Enter, so you can fix a word or add to it before sending. The halo around the mic follows your voice; **Cancel** (or a right click on the mic) throws the recording away. `claude-notch voice` does the same toggle from a shell, and `./install.sh --voice-shortcut 'Meta+Shift+V'` binds a key to it, for push-to-talk without reaching for the mouse.
+
+Everything stays on your machine: PipeWire's `pw-record` captures 16 kHz mono, [whisper.cpp](https://github.com/ggml-org/whisper.cpp) transcribes it. Setup:
+
+```sh
+sudo pacman -S whisper-cpp ggml-vulkan       # ggml-vulkan: run the model on the GPU (any vendor); CPU works too, slower
+mkdir -p ~/.local/share/claude-notch/models
+curl -L -o ~/.local/share/claude-notch/models/ggml-large-v3-turbo-q5_0.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+```
+
+`large-v3-turbo` (q5_0, 574 MB) handles Czech and English well and takes well under a second on a GPU; the first run after boot is slower while the Vulkan shaders compile. Smaller models (`ggml-small.bin`, `ggml-base.bin`) trade accuracy for speed on a CPU. `[voice]` in `config.toml` chooses the model (`auto` = the newest `.bin` in that folder), the language (`auto` detects; `cs` or `en` pins it) and the recorder command. Recordings that are too short or silent are dropped, so a stray click types nothing.
 
 ## Live activity
 

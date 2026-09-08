@@ -55,3 +55,10 @@ none = "#6b6b6b"            # no data
 
 [ui]
 language = "auto"           # "auto" (from $LANG), "en" or "cs"
+
+[voice]
+# Dictation — the mic in the bar. Needs whisper-cpp (`sudo pacman -S whisper-cpp ggml-vulkan`)
+# and a ggml model in ~/.local/share/claude-notch/models/ (see README: Dictation).
+model = "auto"              # "auto" = the newest *.bin in that folder, or a path
+language = "auto"           # whisper language code ("cs", "en", …); "auto" detects
+record = "pw-record --rate 16000 --channels 1 --format s16 {file}"   # 16 kHz mono s16 wav

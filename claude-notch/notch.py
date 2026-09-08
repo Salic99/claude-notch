@@ -19,10 +19,12 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
+from array import array
 from pathlib import Path
 
 try:
@@ -48,6 +50,7 @@ PANEL_FILE = CACHE_DIR / "claude-notch-panel.json"   # the same feed, from the p
 ACTIVITY_FILE = CACHE_DIR / "claude-notch-activity.json"   # written by the hooks
 LOG_FILE = CACHE_DIR / "claude-notch.log"
 KWIN_SCRIPT = CACHE_DIR / "claude-notch-kwin.js"
+MODELS_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")) / "claude-notch" / "models"
 AUTOSTART_FILE = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "autostart" / "claude-notch.desktop"
 
 APP_ID = "claude-notch"                     # Wayland app_id of the notch window
@@ -83,6 +86,11 @@ DEFAULTS = {
     "colors": {"background": "#0d0d0f", "ok": "#32d74b", "warn": "#ffd426",
                "crit": "#ff453a", "none": "#6b6b6b"},
     "ui": {"language": "auto"},
+    "voice": {                                  # dictation: the mic in the bar
+        "model": "auto",        # a ggml whisper model, or "auto" = newest *.bin in MODELS_DIR
+        "language": "auto",     # whisper language code; "auto" detects
+        "record": "pw-record --rate 16000 --channels 1 --format s16 {file}",
+    },
 }
 LANGUAGES = ("en", "cs")
 
@@ -366,6 +374,8 @@ class Bridge(QObject):
     menuRequested = Signal()
     plusRequested = Signal()
     detailsRequested = Signal()
+    voiceChanged = Signal()
+    _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -396,6 +406,19 @@ class Bridge(QObject):
         self._act_timer.timeout.connect(self._poll_activity)
         self._act_timer.start(1000)
         self._poll_activity()
+
+        # Dictation: pw-record into a wav, whisper-cli on it, typed into the chat.
+        self._voice_state = ""                 # "", "recording", "transcribing"
+        self._voice_level = 0.0
+        self._voice_peak = 0.0
+        self._rec: subprocess.Popen | None = None
+        self._rec_file: Path | None = None
+        self._rec_offset = 0
+        self._rec_started = 0.0
+        self._level_timer = QTimer(self)
+        self._level_timer.setInterval(50)
+        self._level_timer.timeout.connect(self._poll_level)
+        self._voiceResult.connect(self._voice_done)
 
     # ── usage feed ──────────────────────────────────────────────────────
     @staticmethod
@@ -624,6 +647,155 @@ class Bridge(QObject):
                          " Install wl-clipboard for reliable clipboard access."))
             return
         self._mention([str(path)])
+
+    # ── dictation ───────────────────────────────────────────────────────
+    @Property(str, notify=voiceChanged)
+    def voiceState(self):
+        return self._voice_state
+
+    @Property(float, notify=voiceChanged)
+    def micLevel(self):
+        return self._voice_level
+
+    @Property(bool, notify=settingsChanged)
+    def voiceReady(self):
+        return self._voice_missing() is None
+
+    def _voice_model(self) -> Path | None:
+        m = str(self.cfg["voice"].get("model", "auto") or "auto")
+        if m != "auto":
+            p = Path(os.path.expanduser(m))
+            return p if p.is_file() else None
+        try:
+            bins = sorted(MODELS_DIR.glob("*.bin"), key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            return None
+        return bins[0] if bins else None
+
+    def _voice_missing(self) -> str | None:
+        rec = shlex.split(self.cfg["voice"]["record"])
+        if not rec or shutil.which(rec[0]) is None:
+            return f"the recorder '{rec[0] if rec else ''}' (pipewire's pw-record) is not installed"
+        if shutil.which("whisper-cli") is None:
+            return "whisper-cli is not installed (sudo pacman -S whisper-cpp ggml-vulkan)"
+        if self._voice_model() is None:
+            return f"no whisper model in {MODELS_DIR} (see README: Dictation)"
+        return None
+
+    def _set_voice(self, state: str, level: float | None = None) -> None:
+        self._voice_state = state
+        if level is not None:
+            self._voice_level = level
+        self.voiceChanged.emit()
+
+    @Slot()
+    def voice(self) -> None:
+        """Toggle dictation: start recording; the next call stops it and types
+        the transcript into the chat (no Enter, so it can be edited first)."""
+        if self._voice_state == "recording":
+            self._voice_stop()
+            return
+        if self._voice_state:
+            return                                       # still transcribing
+        missing = self._voice_missing()
+        if missing:
+            self._notify("Claude Notch", f"Dictation: {missing}.")
+            return
+        if not self._chat:
+            self.show()
+        out = CACHE_DIR / "claude-notch" / "voice"
+        out.mkdir(parents=True, exist_ok=True)
+        self._rec_file = out / "dictation.wav"
+        self._rec_file.unlink(missing_ok=True)
+        argv = [a.replace("{file}", str(self._rec_file)) for a in shlex.split(self.cfg["voice"]["record"])]
+        try:
+            self._rec = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            warn(f"cannot start the recorder {argv}: {e}")
+            self._notify("Claude Notch", f"Dictation: cannot start {argv[0]}.")
+            return
+        self._rec_offset, self._voice_peak, self._rec_started = 44, 0.0, time.time()   # past the wav header
+        self._level_timer.start()
+        self._set_voice("recording", 0.0)
+        log("dictation: recording")
+
+    def _poll_level(self) -> None:
+        """Peak of the samples written since the last tick — drives the mic halo."""
+        if self._rec is None or self._rec_file is None:
+            return
+        try:
+            with open(self._rec_file, "rb") as f:
+                f.seek(self._rec_offset)
+                data = f.read()
+        except OSError:
+            data = b""
+        level = 0.0
+        n = len(data) // 2
+        if n:
+            self._rec_offset += n * 2
+            samples = array("h")
+            samples.frombytes(data[: n * 2])
+            peak = max(abs(v) for v in samples) / 32768
+            self._voice_peak = max(self._voice_peak, peak)
+            level = min(1.0, peak * 2.5)
+        self._voice_level = level if level > self._voice_level else self._voice_level * 0.75   # fast attack, slow release
+        self.voiceChanged.emit()
+        if self._rec.poll() is not None:                 # the recorder died under us
+            self._voice_stop()
+
+    def _stop_recorder(self) -> None:
+        self._level_timer.stop()
+        proc, self._rec = self._rec, None
+        if proc is not None and proc.poll() is None:
+            proc.send_signal(signal.SIGINT)              # lets pw-record finish the wav header
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def _voice_stop(self) -> None:
+        self._stop_recorder()
+        wav, dur = self._rec_file, time.time() - self._rec_started
+        if wav is None or not wav.exists() or dur < 0.6 or self._voice_peak < 0.015:
+            self._set_voice("", 0.0)                     # a stray click, or silence
+            log(f"dictation: dropped ({dur:.1f} s, peak {self._voice_peak:.3f})")
+            if dur >= 0.6:
+                self._notify("Claude Notch", "Dictation: nothing heard — is the microphone muted?")
+            return
+        self._set_voice("transcribing", 0.0)
+        model, lang = self._voice_model(), str(self.cfg["voice"].get("language", "auto") or "auto")
+
+        def worker():
+            text = ""
+            try:
+                r = subprocess.run(["whisper-cli", "-m", str(model), "-f", str(wav), "-l", lang, "-nt", "-np"],
+                                   capture_output=True, text=True, timeout=180)
+                if r.returncode == 0:
+                    text = " ".join(ln.strip() for ln in r.stdout.splitlines() if ln.strip())
+                else:
+                    log(f"whisper-cli failed ({r.returncode}): {r.stderr.strip()[-300:]}")
+            except Exception as e:                       # noqa: BLE001
+                log(f"whisper-cli: {e}")
+            text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", text)  # [BLANK_AUDIO], (music) …
+            self._voiceResult.emit(re.sub(r"\s+", " ", text).strip())
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _voice_done(self, text: str) -> None:
+        self._set_voice("", 0.0)
+        log(f"dictation: {len(text)} chars")
+        if not text:
+            self._notify("Claude Notch", "Dictation: nothing recognised.")
+            return
+        if self._type(text + " "):
+            raise_window(TERM_CLASS)
+
+    @Slot()
+    def voiceCancel(self) -> None:
+        if self._voice_state != "recording":
+            return
+        self._stop_recorder()
+        self._set_voice("", 0.0)
+        log("dictation: cancelled")
 
     @Slot("QVariant")
     def reportState(self, st) -> None:
