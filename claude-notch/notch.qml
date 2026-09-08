@@ -871,23 +871,29 @@ Window {
             Canvas {
                 id: micGlyph
                 anchors.centerIn: parent; width: 18; height: 18
-                RotationAnimation on rotation { running: micBtn.thinking; from: 0; to: 360; duration: 900; loops: Animation.Infinite }
-                onRotationChanged: if (!micBtn.thinking && rotation !== 0) rotation = 0
+                visible: !micBtn.thinking
                 onPaint: {
                     var c = getContext("2d"); c.reset()
                     var cx = width / 2
                     c.lineCap = "round"; c.lineWidth = 1.7
-                    if (micBtn.thinking) {           // a short arc, spun by the animation
-                        c.strokeStyle = "#ebebf0"
-                        c.beginPath(); c.arc(cx, height / 2, 6, 0, Math.PI * 0.6); c.stroke()
-                        return
-                    }
                     var col = micBtn.rec ? pal.crit : "#ebebf0"
                     c.strokeStyle = col; c.fillStyle = col
                     c.beginPath(); c.roundedRect(cx - 2.5, 2, 5, 9, 2.5, 2.5); c.fill()          // capsule
                     c.beginPath(); c.arc(cx, 8.5, 5, 0, Math.PI); c.stroke()                     // cradle
                     c.beginPath(); c.moveTo(cx, 13.5); c.lineTo(cx, 16); c.stroke()             // stem
                     c.beginPath(); c.moveTo(cx - 3.5, 16); c.lineTo(cx + 3.5, 16); c.stroke()   // base
+                }
+            }
+            Canvas {         // transcribing: a short arc going round; the mic itself never turns
+                id: micSpin
+                anchors.centerIn: parent; width: 18; height: 18
+                visible: micBtn.thinking
+                RotationAnimation on rotation { running: micBtn.thinking; from: 0; to: 360; duration: 900; loops: Animation.Infinite }
+                onVisibleChanged: if (!visible) rotation = 0
+                onPaint: {
+                    var c = getContext("2d"); c.reset()
+                    c.lineCap = "round"; c.lineWidth = 1.7; c.strokeStyle = "#ebebf0"
+                    c.beginPath(); c.arc(width / 2, height / 2, 6, 0, Math.PI * 0.6); c.stroke()
                 }
             }
             HoverHandler { id: micHover }
