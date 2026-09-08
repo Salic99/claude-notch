@@ -41,7 +41,8 @@ Window {
               plugins: "Plugins", plusHint: "Add to the conversation", pasteImage: "Paste image from clipboard",
               dropHint: "Drop to add to the conversation", model: "Model", stop: "Stop",
               context: "context", listening: "Listening… click the mic again to finish",
-              transcribing: "Transcribing…", cancel: "Cancel" },
+              transcribing: "Transcribing…", cancel: "Cancel", microphone: "Microphone",
+              micDefault: "System default", muted: "muted" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -55,7 +56,8 @@ Window {
               plugins: "Pluginy", plusHint: "Přidat do konverzace", pasteImage: "Vložit obrázek ze schránky",
               dropHint: "Pusť a přidá se do konverzace", model: "Model", stop: "Zastavit",
               context: "kontext", listening: "Poslouchám… dalším kliknutím na mikrofon ukončíš",
-              transcribing: "Přepisuji…", cancel: "Zrušit" }
+              transcribing: "Přepisuji…", cancel: "Zrušit", microphone: "Mikrofon",
+              micDefault: "Výchozí systémový", muted: "ztlumený" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -64,24 +66,13 @@ Window {
     // the terminal has faded out — otherwise it would stick out of the collapsing shape.
     property bool chatVisual: false
     onChatChanged: { if (chat) { collapseDelay.stop(); chatVisual = true } else { collapseDelay.restart(); barMenu = "" }; updateBubble() }
-    // The bar's popups ("plus", "project", "model"): like the menu they must sit
-    // above the terminal while open.
+    // The bar's popups ("plus", "project", "model"). The notch always sits above
+    // the terminal and keeps its rectangle open (see the container), so a popup
+    // needs no restacking — nothing for the chat to blink about.
     property string barMenu: ""
     readonly property bool barMenuOpen: barMenu !== ""
-    // (barMenuOpen is a binding and may still hold the old value inside this
-    // handler — test barMenu itself.)
-    onBarMenuChanged: {
-        if (barMenu !== "") { menuOpen = false; if (chat) bridge.raiseNotch() }
-        else { lingerHole(); if (chat && !menuOpen) bridge.raiseTerminal() }
-    }
+    onBarMenuChanged: if (barMenu !== "") menuOpen = false     // (test barMenu, not the binding)
     function toggleBarMenu(which) { barMenu = barMenu === which ? "" : which }
-    // While a popup is up the container leaves the terminal's rectangle open.
-    // Raising the terminal back goes through KWin (two D-Bus round trips), so
-    // the hole stays open a little longer — otherwise the container would
-    // paint over the terminal for those frames and the chat would blink.
-    property bool holeLinger: false
-    Timer { id: holeTimer; interval: 600; onTriggered: win.holeLinger = false }
-    function lingerHole() { holeLinger = true; holeTimer.restart() }
     Timer { id: collapseDelay; interval: cfg.timing.collapse_delay_ms; onTriggered: win.chatVisual = false }
 
     // The terminal is parked invisible at click time and revealed the instant the
@@ -116,8 +107,8 @@ Window {
     readonly property real grow: Math.max(0, Math.min(1, (shape.sw - sliverW) / (bubbleW - sliverW)))
 
     onMenuOpenChanged: {
-        if (menuOpen) { menuPage = "main"; barMenu = ""; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
-        else { pointerWasInside = false; lingerHole(); if (chat && barMenu === "") bridge.raiseTerminal() }
+        if (menuOpen) { menuPage = "main"; barMenu = "" }
+        else pointerWasInside = false
         updateBubble()
     }
     Connections {
@@ -308,19 +299,21 @@ Window {
                 ctx.quadraticCurveTo(W, b, W, b + cr)      // inverted corner, bottom
                 ctx.closePath()
                 ctx.fill()
-                // While a popup holds the notch above the terminal, leave the
-                // terminal's rectangle open so it stays visible underneath.
-                if (win.chat && win.chatVisual && (win.menuOpen || win.barMenuOpen || win.holeLinger)) {
+                // The terminal lives in a hole in the container: transparent (and
+                // outside the input mask) from the moment KWin reports it on screen
+                // until the chat closes — so it is never painted over, and never
+                // shows the desktop through the hole before it is there.
+                if (win.chat && win.chatVisual && bridge.terminalShown) {
                     var pad = lay.pad, ins = win.chatInset
                     ctx.clearRect(pad, ins + pad, W - win.stripW - pad, height - 2 * (ins + pad) - win.barH)
                 }
             }
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
+            Connections { target: bridge; function onTerminalShownChanged() { cv.requestPaint() } }
             Connections { target: win
                 function onMenuOpenChanged() { cv.requestPaint() }
                 function onBarMenuChanged() { cv.requestPaint() }
-                function onHoleLingerChanged() { cv.requestPaint() }
                 function onChatVisualChanged() { cv.requestPaint() } }
         }
     }
@@ -662,6 +655,7 @@ Window {
             { l: T.width,      sub: "width" },
             { l: T.autostart,  check: bridge.autostart, a: function() { bridge.setAutostart(!bridge.autostart) }, keep: true },
             { l: T.language,   sub: "language" },
+            { l: T.microphone, sub: "microphone" },
             { sep: true },
             { l: T.editConfig, a: function() { bridge.openConfig() } },
             { l: T.log,        a: function() { bridge.openLog() } }
@@ -673,6 +667,9 @@ Window {
         case "width": return [560, 720, 900, Math.round(Screen.width / 2)].map(function(w, i) {
             return { l: (i === 3 ? T.halfScreen + " (" + w + " px)" : w + " px"),
                      check: bridge.panelWidth === w, a: function() { bridge.setWidth(w) } } })
+        case "microphone": return bridge.microphones.map(function(m) {
+            return { l: (m.name === "auto" ? T.micDefault : m.label) + (m.muted ? "  (" + T.muted + ")" : ""),
+                     check: m.current, a: function() { bridge.setMicrophone(m.name) } } })
         case "language": return [["auto", T.langSystem], ["en", "English"], ["cs", "Čeština"]].map(function(x) {
             return { l: x[1], check: bridge.languageSetting === x[0], a: function() { bridge.setLanguage(x[0]) } } })
         case "about": return [

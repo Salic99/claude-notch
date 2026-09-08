@@ -90,6 +90,7 @@ DEFAULTS = {
         "model": "auto",        # a ggml whisper model, or "auto" = newest *.bin in MODELS_DIR
         "language": "auto",     # whisper language code; "auto" detects
         "record": "pw-record --rate 16000 --channels 1 --format s16 {file}",
+        "source": "auto",       # PipeWire source (microphone) name; "auto" = the system default
     },
 }
 LANGUAGES = ("en", "cs")
@@ -313,16 +314,22 @@ def _kwin_worker() -> None:
 _PIN = ("win.keepAbove = true; win.skipTaskbar = true; "
         "win.skipPager = true; win.skipSwitcher = true;")
 _RAISE = "if (workspace.raiseWindow) workspace.raiseWindow(win); else workspace.activeWindow = win;"
+# The notch sits above the terminal for good and leaves the terminal's rectangle
+# open (paint and input) while the chat is up — so no window has to be restacked
+# for a popup. Whenever the terminal is raised, the notch goes back on top.
+_ABOVE = (f'workspace.windowList().forEach(function(n) {{ if (n.resourceClass === "{APP_ID}") '
+          '{ if (workspace.raiseWindow) workspace.raiseWindow(n); else workspace.activeWindow = n; } });')
+_SHOWN = f'callDBus("{DBUS_SERVICE}", "{DBUS_PATH}", "{DBUS_SERVICE}", "terminalMapped");'
 
 
-def _fade_js(ms: int) -> str:
+def _fade_js(ms: int, then: str = "") -> str:
     steps = max(3, round(ms / 16))
     return f"""
     var t = new QTimer(); t.interval = 16; var step = 0;
     t.timeout.connect(function() {{
         step++; var p = Math.min(1, step / {steps});
         win.opacity = p * p * (3 - 2 * p);
-        if (p >= 1) t.stop();
+        if (p >= 1) {{ t.stop(); {then} }}
     }});
     t.start();"""
 
@@ -340,8 +347,9 @@ workspace.windowList().forEach(function(win) {{
     if (win.minimized) win.minimized = false;
     win.frameGeometry = {{ x: {x}, y: {y}, width: {w}, height: {h} }};
     {_RAISE if raise_it else ""}
-    {_fade_js(fade_ms) if fade_ms else ""}
+    {_fade_js(fade_ms, _SHOWN if cls == TERM_CLASS else "") if fade_ms else ""}
 }});
+{_ABOVE if raise_it and cls != APP_ID else ""}
 """)
 
 
@@ -361,7 +369,8 @@ function grab(win) {{
     if (win.minimized) win.minimized = false;
     win.frameGeometry = {{ x: {x}, y: {y}, width: {w}, height: {h} }};
     {_RAISE}
-    {_fade_js(fade_ms)}
+    {_ABOVE if cls != APP_ID else ""}
+    {_fade_js(fade_ms, _SHOWN if cls == TERM_CLASS else "")}
 }}
 workspace.windowAdded.connect(grab);
 workspace.windowList().forEach(grab);
@@ -378,7 +387,7 @@ def reveal(cls: str, fade_ms: int) -> None:
 workspace.windowList().forEach(function(win) {{
     if (win.resourceClass !== "{cls}") return;
     if (win.minimized) win.minimized = false;
-    {_fade_js(fade_ms)}
+    {_fade_js(fade_ms, _SHOWN if cls == TERM_CLASS else "")}
 }});
 """)
 
@@ -406,6 +415,7 @@ workspace.windowList().forEach(function(win) {{
     if (win.resourceClass !== "{cls}" || win.minimized) return;
     {_RAISE}
 }});
+{_ABOVE if cls != APP_ID else ""}
 """)
 
 
@@ -422,6 +432,7 @@ class Bridge(QObject):
     barRequested = Signal(str)             # "plus" | "project" | "model"
     detailsRequested = Signal()
     voiceChanged = Signal()
+    terminalShownChanged = Signal()
     _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
 
     def __init__(self, cfg: dict):
@@ -434,6 +445,7 @@ class Bridge(QObject):
         self._engine = None
         self._pending_rects = None
         self._chat = False
+        self._term_shown = False               # KWin has faded the terminal in (see _SHOWN)
         self._proc: subprocess.Popen | None = None
         self._workdir = self._resolve_workdir(cfg["agent"]["workdir"])
         self._continue = False
@@ -485,10 +497,10 @@ class Bridge(QObject):
             raw = json.loads(USAGE_FILE.read_text())
             rl = raw.get("rate_limits") or {}
             fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
-            if "used_percentage" in fh:
-                d["fiveHour"] = round(fh["used_percentage"]); d["fiveReset"] = fh.get("resets_at", 0)
-            if "used_percentage" in sd:
-                d["sevenDay"] = round(sd["used_percentage"]); d["sevenReset"] = sd.get("resets_at", 0)
+            if fh.get("used_percentage") is not None:       # keys may be present but null
+                d["fiveHour"] = round(fh["used_percentage"]); d["fiveReset"] = fh.get("resets_at") or 0
+            if sd.get("used_percentage") is not None:
+                d["sevenDay"] = round(sd["used_percentage"]); d["sevenReset"] = sd.get("resets_at") or 0
             d["writtenAt"] = raw.get("_at", 0)
         except FileNotFoundError:
             log(f"no usage feed yet at {USAGE_FILE} — is the status line hook installed?")
@@ -507,7 +519,7 @@ class Bridge(QObject):
             log(f"panel feed unreadable ({e})")
         d["model"] = (src.get("model") or {}).get("display_name", "")
         cw = src.get("context_window") or {}
-        if "used_percentage" in cw:
+        if cw.get("used_percentage") is not None:
             d["ctx"] = round(cw["used_percentage"])
         self._usage = d
         self.usageChanged.emit()
@@ -602,6 +614,7 @@ class Bridge(QObject):
         if not self._chat:
             return
         self._chat = False
+        self._set_term_shown(False)
         self.chatOpenChanged.emit()
         hide_window(TERM_CLASS)
 
@@ -719,6 +732,48 @@ class Bridge(QObject):
     def voiceReady(self):
         return self._voice_missing() is None
 
+    @Property("QVariant", notify=settingsChanged)
+    def microphones(self):
+        """PipeWire sources for the menu: the system default first, then each
+        input (monitors left out), marked current / muted."""
+        want = str(self.cfg["voice"].get("source", "auto") or "auto")
+        items = [{"name": "auto", "label": "", "current": want == "auto", "muted": False}]
+        try:
+            r = subprocess.run(["pactl", "-f", "json", "list", "sources"], capture_output=True, text=True, timeout=5)
+            for src in json.loads(r.stdout or "[]"):
+                name = src.get("name", "")
+                if not name or name.endswith(".monitor"):
+                    continue
+                props = src.get("properties") or {}
+                label = (props.get("node.description") or props.get("device.description")
+                         or props.get("node.nick") or src.get("description") or "")
+                if not label or label == "(null)":
+                    label = name.replace("alsa_input.", "").replace("bluez_input.", "")
+                items.append({"name": name, "label": label, "current": want == name, "muted": bool(src.get("mute"))})
+        except Exception as e:                           # noqa: BLE001
+            log(f"cannot list microphones ({e})")
+        return items
+
+    @Slot(str)
+    def setMicrophone(self, name: str) -> None:
+        """Pick the dictation source; a muted one is unmuted, or nothing would ever be heard."""
+        if name != "auto":
+            subprocess.run(["pactl", "set-source-mute", name, "0"], capture_output=True, timeout=5)
+        set_config("voice", "source", name)
+        self.reloadConfig()
+
+    def _record_argv(self, wav: Path) -> list[str]:
+        argv = [a.replace("{file}", str(wav)) for a in shlex.split(self.cfg["voice"]["record"])]
+        src = str(self.cfg["voice"].get("source", "auto") or "auto")
+        if src != "auto":
+            if "{target}" in argv:
+                argv = [src if a == "{target}" else a for a in argv]
+            elif argv and os.path.basename(argv[0]) == "pw-record":
+                argv[1:1] = ["--target", src]
+        else:
+            argv = [a for a in argv if a != "{target}"]
+        return argv
+
     def _voice_model(self) -> Path | None:
         m = str(self.cfg["voice"].get("model", "auto") or "auto")
         if m != "auto":
@@ -765,7 +820,7 @@ class Bridge(QObject):
         out.mkdir(parents=True, exist_ok=True)
         self._rec_file = out / "dictation.wav"
         self._rec_file.unlink(missing_ok=True)
-        argv = [a.replace("{file}", str(self._rec_file)) for a in shlex.split(self.cfg["voice"]["record"])]
+        argv = self._record_argv(self._rec_file)
         try:
             self._rec = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
@@ -818,7 +873,7 @@ class Bridge(QObject):
             self._set_voice("", 0.0)                     # a stray click, or silence
             log(f"dictation: dropped ({dur:.1f} s, peak {self._voice_peak:.3f})")
             if dur >= 0.6:
-                self._notify("Claude Notch", "Dictation: nothing heard — is the microphone muted?")
+                self._notify("Claude Notch", "Dictation: nothing heard. Pick the microphone in the orb menu: Settings › Microphone.")
             return
         self._set_voice("transcribing", 0.0)
         model, lang = self._voice_model(), str(self.cfg["voice"].get("language", "auto") or "auto")
@@ -872,6 +927,7 @@ class Bridge(QObject):
         """UI state as JSON — `claude-notch state`; handy when reporting bugs."""
         return json.dumps({"chat": self._chat, "workdir": str(self._workdir),
                            "terminal": self._terminal_running(),
+                           "terminalShown": self._term_shown,
                            "screen": self.cfg["screen"]["name"], "lang": self.cfg["ui"]["language"],
                            "geo": list(self._geo), "width": int(self.L["width"]),
                            "activity": self._activity,
@@ -911,6 +967,7 @@ class Bridge(QObject):
         return r.returncode == 0
 
     def _kill_terminal(self) -> None:
+        self._set_term_shown(False)
         if self._proc is not None and self._proc.poll() is None:
             self._proc.terminate()
         subprocess.run(["pkill", "-f", f"^{re.escape(self._term_bin())}\\b.*{TERM_CLASS}"], capture_output=True)
@@ -1029,6 +1086,23 @@ class Bridge(QObject):
     def revealTerminal(self) -> None:
         if self._chat:
             reveal(TERM_CLASS, int(self.T["fade_ms"]))
+
+    @Property(bool, notify=terminalShownChanged)
+    def terminalShown(self):
+        """True from the moment the terminal is on screen until the chat closes —
+        the container keeps its rectangle open (transparent, no input) meanwhile."""
+        return self._term_shown
+
+    def _set_term_shown(self, on: bool) -> None:
+        if on != self._term_shown:
+            self._term_shown = on
+            self.terminalShownChanged.emit()
+
+    @Slot()
+    def terminalMapped(self) -> None:
+        """Called from the KWin fade-in script once the terminal is fully visible."""
+        if self._chat:
+            self._set_term_shown(True)
 
     @Slot()
     def raiseNotch(self) -> None:

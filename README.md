@@ -119,7 +119,7 @@ curl -L -o ~/.local/share/claude-notch/models/ggml-large-v3-turbo-q5_0.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
 ```
 
-`large-v3-turbo` (q5_0, 574 MB) handles Czech and English well and takes well under a second on a GPU; the first run after boot is slower while the Vulkan shaders compile. Smaller models (`ggml-small.bin`, `ggml-base.bin`) trade accuracy for speed on a CPU. `[voice]` in `config.toml` chooses the model (`auto` = the newest `.bin` in that folder), the language (`auto` detects; `cs` or `en` pins it) and the recorder command. Recordings that are too short or silent are dropped, so a stray click types nothing.
+The microphone is the system default unless you pick one in the orb menu (*Settings › Microphone*; `[voice].source`). `large-v3-turbo` (q5_0, 574 MB) handles Czech and English well and takes well under a second on a GPU; the first run after boot is slower while the Vulkan shaders compile. Smaller models (`ggml-small.bin`, `ggml-base.bin`) trade accuracy for speed on a CPU. `[voice]` in `config.toml` chooses the model (`auto` = the newest `.bin` in that folder), the language (`auto` detects; `cs` or `en` pins it) and the recorder command. Recordings that are too short or silent are dropped, so a stray click types nothing.
 
 ## Live activity
 
@@ -143,7 +143,7 @@ Below the notch sits a small hook — the **orb**. Hover it and the hook curls u
 | **Project ›** | pick the folder the agent starts in — the configured workdir and its most recent sub-folders |
 | **Open in a window** | the same agent in a normal, decorated terminal window for longer work |
 | **Show details** | keeps the usage bubble open until you click elsewhere |
-| **Settings ›** | **Monitor** (lists your outputs), **Panel width**, **Start at login**, **Language**, plus *Edit config file* and *View log* |
+| **Settings ›** | **Monitor** (lists your outputs), **Panel width**, **Start at login**, **Language**, **Microphone** (for dictation; picking a muted one unmutes it), plus *Edit config file* and *View log* |
 | **Restart notch** / **Quit** | |
 
 Settings that change the layout are written to `config.toml` (comments preserved) and applied **live** — monitor, panel width and language take effect without restarting; the chat's terminal keeps its session. After editing `config.toml` by hand, `claude-notch reload` (or the menu) re-reads it.
@@ -175,7 +175,9 @@ The UI language follows your desktop locale (English, Czech). `claude-notch rest
 
 **Placement via KWin scripting.** `LayerShellQt` would be the textbook way to anchor a surface to a screen edge, but it needs C++ initialisation the `qml` runtime does not perform, and hand-written KWin window rules were silently discarded on reconfigure. What works reliably is KWin's scripting D-Bus API: a tiny JavaScript snippet sets `frameGeometry`, `keepAbove` and `skipTaskbar` by `resourceClass`. KWin caches scripts by *name* and never re-reads the file, so each call registers a fresh name. Calls are serialised on a worker thread so the two D-Bus round trips never stall an animation.
 
-**The terminal lives inside the container.** It is a separate window, inset by a few pixels so the container's rounded corners frame it. On click it is placed immediately but fully transparent; QML watches the unfolding shape and calls back the instant the shape covers the terminal's rectangle, which fades it in — the terminal is never drawn over the wallpaper, and there is no fixed delay to tune. Closing mirrors this: the terminal fades out first, then the shape collapses.
+**The terminal lives in a hole in the container.** It is a separate window, inset by a few pixels so the container's rounded corners frame it, and the notch stays *above* it: while the chat is up the container leaves the terminal's rectangle transparent and outside its input mask, so the terminal shows through and gets every click, while the bar's popups and the menu can open over it without any window being restacked. On click the terminal is placed immediately but fully transparent; QML watches the unfolding shape and calls back the instant the shape covers the terminal's rectangle, which fades it in — the terminal is never drawn over the wallpaper, and there is no fixed delay to tune. The KWin script that runs the fade reports back over D-Bus when it is done, and only then does the hole open, so a freshly launched terminal (a new session, a project switch) appears in place rather than as a glimpse of wallpaper. Closing mirrors this: the hole closes, the terminal fades out, then the shape collapses.
+
+Every KWin script ends by calling back into the notch, so a job counts as done only once it has actually run: jobs execute strictly in order, a lost one is retried, and the script file is deleted only afterwards (KWin reads it on a worker thread after `run()` returns). Script objects are left loaded on purpose — KWin hands out ids as `scripts.size()`, so unloading one makes a later id collide with a live script's D-Bus path.
 
 **No flight to the taskbar.** Hiding uses minimize, and KWin animates minimizing windows towards their taskbar icon. The notch fades the window to zero opacity *before* minimizing and un-minimizes it while still transparent, so KWin's animation runs on an invisible window.
 
