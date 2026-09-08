@@ -235,31 +235,77 @@ def run_kwin(js: str) -> None:
             threading.Thread(target=_kwin_worker, daemon=True).start()
 
 
+_kwin_done: list[tuple[float, Path]] = []    # (when, file) of jobs already handed to KWin
+_kwin_ack = threading.Event()                  # set by Bridge.kwinDone when the job's script has run
+_kwin_ack_seq = 0
+
+
+def _kwin_cleanup() -> None:
+    """Delete script files of jobs that ran a while ago. KWin reads the file on
+    a worker thread after `run` returns, so deleting right away loses the job
+    whenever KWin is busy. The script objects are left loaded on purpose: KWin
+    hands out ids as scripts.size(), so unloading one makes a later id collide
+    with a live script's D-Bus path."""
+    now = time.time()
+    keep = []
+    for when, path in _kwin_done:
+        if now - when > 2.0:
+            path.unlink(missing_ok=True)
+        else:
+            keep.append((when, path))
+    _kwin_done[:] = keep
+
+
+def _qdbus(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["qdbus6", "org.kde.KWin", *args], capture_output=True, text=True, timeout=8)
+
+
 def _kwin_worker() -> None:
-    global _seq
+    """Every script ends by calling back into the notch (callDBus → kwinDone),
+    so a job counts as done only once KWin has actually run it. Jobs therefore
+    execute strictly in order, and one that got lost — KWin ran a different
+    script under that id, or never read the file — is retried through
+    Scripting.start(), which runs every loaded script that is not running yet."""
+    global _seq, _kwin_ack_seq
     while True:
         with _kwin_lock:
             if not _kwin_jobs:
                 return
             js = _kwin_jobs[0]
         _seq += 1
-        path = KWIN_SCRIPT.with_name(f"claude-notch-kwin-{_seq}.js")
+        path = KWIN_SCRIPT.with_name(f"claude-notch-kwin-{os.getpid()}-{_seq}.js")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(js)
+        # A script that KWin only gets round to running much later (a retry
+        # through Scripting.start() picks up every script it never ran) must not
+        # act on a state long gone: it just reports in and stops.
+        stale = int((time.time() + 1.5) * 1000)
+        path.write_text(f'if (Date.now() > {stale}) {{ callDBus("{DBUS_SERVICE}", "{DBUS_PATH}", "{DBUS_SERVICE}", "kwinDone", {_seq}); }} else {{\n'
+                        + js + f'\ncallDBus("{DBUS_SERVICE}", "{DBUS_PATH}", "{DBUS_SERVICE}", "kwinDone", {_seq}); }}\n')
         name = f"claudenotch{os.getpid()}x{_seq}"
+        t0 = time.time()
         try:
-            sid = subprocess.run(["qdbus6", "org.kde.KWin", "/Scripting",
-                                  "org.kde.kwin.Scripting.loadScript", str(path), name],
-                                 capture_output=True, text=True, timeout=8).stdout.strip()
-            if sid:
-                subprocess.run(["qdbus6", "org.kde.KWin", f"/Scripting/Script{sid}",
-                                "org.kde.kwin.Script.run"], capture_output=True, timeout=8)
-            else:
-                warn("KWin refused the script (is this a KDE Plasma Wayland session?)")
+            _kwin_cleanup()
+            ld = _qdbus("/Scripting", "org.kde.kwin.Scripting.loadScript", str(path), name)
+            sid = ld.stdout.strip()
+            if not sid or sid == "-1":
+                warn(f"KWin refused the script (is this a KDE Plasma Wayland session?) {ld.stderr.strip()[:120]}")
+                path.unlink(missing_ok=True)
+                continue
+            _kwin_ack_seq = _seq
+            _kwin_ack.clear()
+            _qdbus(f"/Scripting/Script{sid}", "org.kde.kwin.Script.run")
+            if not _kwin_ack.wait(0.8):
+                log(f"kwin job {_seq}: Script{sid}.run did not reach it — retrying via Scripting.start")
+                _qdbus("/Scripting", "org.kde.kwin.Scripting.start")
+                if not _kwin_ack.wait(1.5):
+                    warn(f"kwin job {_seq} lost: {' '.join(js.split())[:80]}")
+            elif VERBOSE:
+                log(f"kwin job {_seq}: done in {int((time.time() - t0) * 1000)} ms — {' '.join(js.split())[:70]}")
+            _kwin_done.append((time.time(), path))
         except Exception as e:                           # noqa: BLE001
             warn(f"cannot talk to KWin: {e}")
-        finally:
             path.unlink(missing_ok=True)
+        finally:
             with _kwin_lock:
                 _kwin_jobs.pop(0)
 
@@ -373,6 +419,7 @@ class Bridge(QObject):
     activityChanged = Signal()
     menuRequested = Signal()
     plusRequested = Signal()
+    barRequested = Signal(str)             # "plus" | "project" | "model"
     detailsRequested = Signal()
     voiceChanged = Signal()
     _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
@@ -571,6 +618,17 @@ class Bridge(QObject):
             QTimer.singleShot(600, self.plusRequested.emit)
         else:
             self.plusRequested.emit()
+
+    @Slot(str)
+    def bar(self, which: str) -> None:
+        """Toggle one of the bar's popups by name (`claude-notch bar model`)."""
+        if which not in ("plus", "project", "model"):
+            return
+        if not self._chat:
+            self.show()
+            QTimer.singleShot(600, lambda: self.barRequested.emit(which))
+        else:
+            self.barRequested.emit(which)
 
     def _pick(self, args: list[str], then) -> None:
         """Run a kdialog picker off the GUI thread, hand its lines to `then` on it."""
@@ -796,6 +854,12 @@ class Bridge(QObject):
         self._stop_recorder()
         self._set_voice("", 0.0)
         log("dictation: cancelled")
+
+    @Slot(int)
+    def kwinDone(self, seq: int) -> None:
+        """Called from inside each KWin script once it has run (see _kwin_worker)."""
+        if seq == _kwin_ack_seq:
+            _kwin_ack.set()
 
     @Slot("QVariant")
     def reportState(self, st) -> None:
@@ -1164,6 +1228,8 @@ def main() -> int:
         warn("already running (D-Bus service taken); use `claude-notch toggle`")
         return 0
 
+    for stale in KWIN_SCRIPT.parent.glob("claude-notch-kwin-*.js"):   # left by an instance that died
+        stale.unlink(missing_ok=True)
     cfg = load_config()
     bridge = Bridge(cfg)
     bus.registerObject(DBUS_PATH, bridge, QDBusConnection.RegisterOption.ExportAllSlots)

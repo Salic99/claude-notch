@@ -68,8 +68,10 @@ Window {
     // above the terminal while open.
     property string barMenu: ""
     readonly property bool barMenuOpen: barMenu !== ""
+    // (barMenuOpen is a binding and may still hold the old value inside this
+    // handler — test barMenu itself.)
     onBarMenuChanged: {
-        if (barMenuOpen) { menuOpen = false; if (chat) bridge.raiseNotch() }
+        if (barMenu !== "") { menuOpen = false; if (chat) bridge.raiseNotch() }
         else { lingerHole(); if (chat && !menuOpen) bridge.raiseTerminal() }
     }
     function toggleBarMenu(which) { barMenu = barMenu === which ? "" : which }
@@ -115,13 +117,14 @@ Window {
 
     onMenuOpenChanged: {
         if (menuOpen) { menuPage = "main"; barMenu = ""; if (chat) bridge.raiseNotch() }   // the menu must sit above the terminal
-        else { pointerWasInside = false; lingerHole(); if (chat && !barMenuOpen) bridge.raiseTerminal() }
+        else { pointerWasInside = false; lingerHole(); if (chat && barMenu === "") bridge.raiseTerminal() }
         updateBubble()
     }
     Connections {
         target: bridge
         function onMenuRequested() { win.menuOpen = !win.menuOpen }
         function onPlusRequested() { win.toggleBarMenu("plus") }
+        function onBarRequested(which) { win.toggleBarMenu(which) }
         function onVoiceChanged() { micGlyph.requestPaint() }
         function onDetailsRequested() { win.pinInfo = !win.pinInfo }
     }
@@ -931,6 +934,7 @@ Window {
         }
 
         Row {
+            id: rightRow
             anchors.right: parent.right; anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             spacing: 8
@@ -1009,7 +1013,7 @@ Window {
     component BarPopup: Rectangle {
         id: pop
         property string which
-        property Item under                    // the chip it opens from
+        property real anchorX: plusBar.x + 4   // left edge of the chip it opens from (window coordinates)
         property var items: []                 // { l, check, a }
         property alias hovered: popHover.hovered
         readonly property bool open: win.barMenu === which
@@ -1018,8 +1022,7 @@ Window {
         radius: 16
         color: pal.background
         border.color: Qt.rgba(1, 1, 1, 0.10); border.width: 1
-        x: { open; var ax = under ? under.mapToItem(win, 0, 0).x - 4 : plusBar.x + 4
-             return Math.max(plusBar.x, Math.min(ax, plusBar.x + plusBar.width - width)) }
+        x: Math.max(plusBar.x, Math.min(anchorX - 4, plusBar.x + plusBar.width - width))
         y: plusBar.y - height - 4
         opacity: open ? 1 : 0
         visible: opacity > 0.01
@@ -1078,7 +1081,7 @@ Window {
 
     BarPopup {
         id: plusPop
-        which: "plus"; under: plusBtn
+        which: "plus"; anchorX: plusBar.x + plusBtn.x
         items: [
             { l: win.txt.addFiles,   a: function() { bridge.addFiles() } },
             { l: win.txt.addFolder,  a: function() { bridge.addFolder() } },
@@ -1089,13 +1092,13 @@ Window {
     }
     BarPopup {
         id: projectPop
-        which: "project"; under: projectChip
+        which: "project"; anchorX: plusBar.x + projectChip.x
         items: bridge.projects.map(function(p) {
             return { l: p.name, check: p.current, a: function() { bridge.setProject(p.path) } } })
     }
     BarPopup {
         id: modelPop
-        which: "model"; under: modelChip
+        which: "model"; anchorX: plusBar.x + rightRow.x + modelChip.x
         items: bridge.models.map(function(m) {
             return { l: m.name, check: m.current,
                      a: function() { win.modelOverride = m.name; bridge.setModel(m.id) } } })

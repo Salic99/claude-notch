@@ -71,6 +71,7 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
 | the bar under the terminal | **+** (files, folder, clipboard image, `/mcp`, `/plugin` — `claude-notch plus`), the **mic** (`claude-notch voice`), the **project** and **model** pickers, the context gauge, **Stop** |
 | `claude-notch add <file>…` | mention files in the chat |
+| `claude-notch bar plus\|project\|model` | open one of the bar's popups |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
 

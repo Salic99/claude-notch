@@ -21,7 +21,8 @@ stop() {
 start() {
   running && { echo "claude-notch: already running"; return 0; }
   [[ -f $APP ]] || { echo "claude-notch: $APP not found — run install.sh" >&2; return 1; }
-  setsid python3 "$APP" "$@" >"$LOG" 2>&1 < /dev/null &
+  : >"$LOG"
+  setsid python3 "$APP" "$@" >>"$LOG" 2>&1 < /dev/null &
   for _ in $(seq 1 40); do running && return 0; sleep 0.1; done
   echo "claude-notch: failed to start, see $LOG" >&2; return 1
 }
@@ -31,6 +32,8 @@ case "${1:-toggle}" in
   toggle|show|hide|menu|plus|details|voice)
            running || start
            call "$1" ;;
+  bar)     running || start
+           qdbus6 "$SVC" "$OBJ" "$SVC.bar" "${2:?usage: claude-notch bar plus|project|model}" ;;
   reload)  running && call reloadConfig || start ;;
   stop)    stop ;;
   restart) stop; start "${@:2}" ;;
@@ -44,6 +47,7 @@ case "${1:-toggle}" in
            echo "  claude-notch toggle       open/close the chat (bind this to a shortcut)"
            echo "  claude-notch menu         open the orb menu"; echo "  claude-notch plus         open the + popup (files, folder, connectors, plugins)"
            echo "  claude-notch voice        dictate: start recording / stop and type it into the chat"
+           echo "  claude-notch bar <name>   open a bar popup: plus | project | model"
            echo "  claude-notch details      pin the usage bubble"
            echo "  claude-notch add <file>…  mention files in the chat (opens it if needed)"
            echo "  claude-notch status | state | stop | restart" ;;
