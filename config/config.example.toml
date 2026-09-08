@@ -63,3 +63,12 @@ model = "auto"              # "auto" = the newest *.bin in that folder, or a pat
 language = "auto"           # whisper language code ("cs", "en", …); "auto" detects
 record = "pw-record --rate 16000 --channels 1 --format s16 {file}"   # 16 kHz mono s16 wav
 source = "auto"             # microphone: a PipeWire source name, or "auto" = the system default (orb menu › Settings › Microphone)
+
+[speech]
+# Claude reads its answers aloud — the speaker in the bar. Needs piper (`uv tool install piper-tts`)
+# and a voice (.onnx + .onnx.json) in ~/.local/share/claude-notch/voices/ (see README: Speech).
+enabled = false
+voice = "auto"              # a voice name from that folder, e.g. "cs_CZ-jirka-medium"; "auto" picks by language
+max_chars = 700             # longer answers are cut at a sentence end
+piper = "piper"             # the piper CLI
+play = "pw-play {file}"     # how to play the synthesized wav

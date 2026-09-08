@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Claude Code hook target: records session activity for the notch's live ring.
+# Claude Code hook target: records session activity for the notch's live ring
+# and, for the chat panel's session, feeds its speech.
 # Wired by install.sh into ~/.claude/settings.json. Reads the hook JSON on stdin
 # (for session_id) and writes one line per session to ~/.cache/claude-notch-activity.json.
 #   claude-notch-activity <busy|idle|waiting>
@@ -7,8 +8,21 @@ export LC_ALL=C.UTF-8
 state="${1:-idle}"
 dir="${XDG_CACHE_HOME:-$HOME/.cache}"
 out="$dir/claude-notch-activity.json"
-sid=$(jq -r '.session_id // "?"' 2>/dev/null <<<"$(cat)")
+input=$(cat)
+sid=$(jq -r '.session_id // "?"' 2>/dev/null <<<"$input")
 [ -z "$sid" ] && sid="?"
+# The panel's own session (CLAUDE_NOTCH_PANEL is set by the notch) also hands
+# the notch what it needs to speak: the transcript at the end of a turn, the
+# message of a notification. Fire-and-forget, the hook must not wait.
+if [ -n "${CLAUDE_NOTCH_PANEL:-}" ] && command -v qdbus6 >/dev/null; then
+  event=$(jq -r '.hook_event_name // ""' 2>/dev/null <<<"$input")
+  case "$event" in
+    Stop) tp=$(jq -r '.transcript_path // ""' 2>/dev/null <<<"$input")
+          [ -n "$tp" ] && (qdbus6 org.claudenotch.Notch /Notch org.claudenotch.Notch.turnEnded "$tp" >/dev/null 2>&1 &) ;;
+    Notification) msg=$(jq -r '.message // ""' 2>/dev/null <<<"$input")
+          [ -n "$msg" ] && (qdbus6 org.claudenotch.Notch /Notch org.claudenotch.Notch.notified "$msg" >/dev/null 2>&1 &) ;;
+  esac
+fi
 tmp=$(mktemp "$out.XXXXXX") || exit 0
 # keep one record per session, replace this session's, drop entries older than 1 day
 jq -c --arg s "$sid" --arg st "$state" --argjson t "$(date +%s)" '

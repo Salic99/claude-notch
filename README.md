@@ -39,6 +39,7 @@ The numbers come from Claude Code itself. Claude Code hands its status line a JS
 - **tmux** (optional) — for the + bar under the chat and sessions that survive the panel
 - **wl-clipboard** (optional) — for *Paste image from clipboard*
 - **whisper-cpp** + a model (optional) — for dictation, the mic in the bar; `ggml-vulkan` runs it on the GPU
+- **piper** + a voice (optional) — for Claude reading its answers aloud, the speaker in the bar
 - Claude Code with a plan that reports rate limits (Pro/Max); any other agent CLI works for the chat panel
 
 On Arch/CachyOS: `sudo pacman -S pyside6 qt6-tools kscreen jq alacritty tmux wl-clipboard`
@@ -87,6 +88,7 @@ Under the terminal sits a bar — the chat's own controls, drawn by the notch ra
 |---|---|
 | **+** | the popup below (or `claude-notch plus`) |
 | **mic** | dictation — see below (or `claude-notch voice`) |
+| **speaker** | Claude reads its answers aloud — see *Speech* below (`claude-notch speech on\|off`) |
 | **project ▾** | the folder the chat runs in; pick another and a new session starts there (the configured workdir and its most recent sub-folders — the same list as the orb menu's *Project*) |
 | **model ▾** | the model the chat runs on; a pick types `/model <id>` into it. The list is `[agent].models` in `config.toml` |
 | **◔ 28 % context** | how full the session's context window is, in the ring's colours |
@@ -120,6 +122,20 @@ curl -L -o ~/.local/share/claude-notch/models/ggml-large-v3-turbo-q5_0.bin \
 ```
 
 The microphone is the system default unless you pick one in the orb menu (*Settings › Microphone*; `[voice].source`). `large-v3-turbo` (q5_0, 574 MB) handles Czech and English well and takes well under a second on a GPU; the first run after boot is slower while the Vulkan shaders compile. Smaller models (`ggml-small.bin`, `ggml-base.bin`) trade accuracy for speed on a CPU. `[voice]` in `config.toml` chooses the model (`auto` = the newest `.bin` in that folder), the language (`auto` detects; `cs` or `en` pins it) and the recorder command. Recordings that are too short or silent are dropped, so a stray click types nothing.
+
+### Speech
+
+Turn the speaker on and Claude reads every answer of the chat aloud as soon as it finishes — the plain sentences of it: code blocks, tables and link targets are left out, and a long answer stops at a sentence end after `[speech].max_chars`. While it talks the speaker's waves breathe; a click stops it. When Claude waits on you (a permission prompt, a question), it says so. Nothing leaves the machine: [piper](https://github.com/OHF-Voice/piper1-gpl) synthesizes, PipeWire plays.
+
+```sh
+uv tool install piper-tts                     # or pipx; puts `piper` in ~/.local/bin
+mkdir -p ~/.local/share/claude-notch/voices && cd ~/.local/share/claude-notch/voices
+B=https://huggingface.co/rhasspy/piper-voices/resolve/main
+curl -LO $B/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx -LO $B/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx.json
+curl -LO $B/en/en_US/lessac/medium/en_US-lessac-medium.onnx -LO $B/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+```
+
+Any voice from [piper-voices](https://huggingface.co/rhasspy/piper-voices) works; `auto` picks a Czech voice when the answer has Czech diacritics, else one for the UI language. The Stop hook of the panel's session hands the notch the transcript path; that is how it knows what was said (`claude-notch say "…"` speaks anything).
 
 ## Live activity
 

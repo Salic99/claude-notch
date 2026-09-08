@@ -42,7 +42,7 @@ Window {
               dropHint: "Drop to add to the conversation", model: "Model", stop: "Stop",
               context: "context", listening: "Listening… click the mic again to finish",
               transcribing: "Transcribing…", cancel: "Cancel", microphone: "Microphone",
-              micDefault: "System default", muted: "muted" },
+              micDefault: "System default", muted: "muted", speech: "Read answers aloud" },
         cs: { title: "Claude Usage", session: "Aktuální relace", all: "Všechny modely",
               used: " % využito", none: "žádná data", resetIn: "reset za", now: "teď",
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
@@ -57,7 +57,7 @@ Window {
               dropHint: "Pusť a přidá se do konverzace", model: "Model", stop: "Zastavit",
               context: "kontext", listening: "Poslouchám… dalším kliknutím na mikrofon ukončíš",
               transcribing: "Přepisuji…", cancel: "Zrušit", microphone: "Mikrofon",
-              micDefault: "Výchozí systémový", muted: "ztlumený" }
+              micDefault: "Výchozí systémový", muted: "ztlumený", speech: "Předčítat odpovědi" }
     })[bridge.lang] || ({})                                // live: menu > language
 
     // ── state ────────────────────────────────────────────────────────
@@ -901,10 +901,55 @@ Window {
             TapHandler { acceptedButtons: Qt.RightButton; onTapped: bridge.voiceCancel() }
         }
 
+        // the speaker: Claude reads its answers aloud; click toggles, a click while it talks stops it
+        Rectangle {
+            id: spkBtn
+            anchors.left: micBtn.right; anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            width: 28; height: 28; radius: 14
+            readonly property bool on: bridge.speechEnabled
+            readonly property bool talking: bridge.speaking
+            color: Qt.rgba(1, 1, 1, spkHover.hovered ? 0.18 : (on ? 0.13 : 0.09))
+            border.color: Qt.rgba(1, 1, 1, on ? 0.22 : 0.12); border.width: 1
+            Behavior on color { ColorAnimation { duration: 120 } }
+            Canvas {
+                id: spkGlyph
+                anchors.centerIn: parent; width: 18; height: 18
+                property real wave: 1
+                SequentialAnimation on wave {
+                    running: spkBtn.talking; loops: Animation.Infinite
+                    NumberAnimation { to: 0.25; duration: 420; easing.type: Easing.InOutSine }
+                    NumberAnimation { to: 1.0;  duration: 420; easing.type: Easing.InOutSine }
+                }
+                onWaveChanged: requestPaint()
+                Connections { target: bridge; function onSpeechChanged() { spkGlyph.requestPaint() } }
+                onPaint: {
+                    var c = getContext("2d"); c.reset()
+                    var col = spkBtn.on ? "#ebebf0" : "#8e8e93"
+                    c.fillStyle = col; c.strokeStyle = col; c.lineWidth = 1.6; c.lineCap = "round"; c.lineJoin = "round"
+                    c.beginPath()                                        // the horn
+                    c.moveTo(3, 6.5); c.lineTo(6, 6.5); c.lineTo(9.5, 3.5); c.lineTo(9.5, 14.5); c.lineTo(6, 11.5); c.lineTo(3, 11.5)
+                    c.closePath(); c.fill()
+                    if (spkBtn.on) {                                     // the waves, breathing while it talks
+                        c.globalAlpha = spkBtn.talking ? 0.35 + 0.65 * spkGlyph.wave : 1
+                        c.beginPath(); c.arc(9.5, 9, 4, -Math.PI * 0.3, Math.PI * 0.3); c.stroke()
+                        c.beginPath(); c.arc(9.5, 9, 6.8, -Math.PI * 0.3, Math.PI * 0.3); c.stroke()
+                    } else {                                             // off: a small slash
+                        c.beginPath(); c.moveTo(12, 6); c.lineTo(16.5, 12); c.stroke()
+                    }
+                }
+            }
+            HoverHandler { id: spkHover }
+            TapHandler {
+                gesturePolicy: TapHandler.ReleaseWithinBounds
+                onTapped: { if (spkBtn.talking) bridge.speakStop(); else bridge.setSpeech(!spkBtn.on) }
+            }
+        }
+
         // While a file is dragged over, or dictation runs, the project chip gives way to a line of text.
         readonly property bool aside: drop.containsDrag || bridge.voiceState !== ""
         Row {
-            anchors.left: micBtn.right; anchors.leftMargin: 10
+            anchors.left: spkBtn.right; anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
             spacing: 10
             opacity: plusBar.aside ? 1 : 0
@@ -927,7 +972,7 @@ Window {
         // project: the folder the agent runs in — click to switch (new session there)
         BarChip {
             id: projectChip
-            anchors.left: micBtn.right; anchors.leftMargin: 10
+            anchors.left: spkBtn.right; anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
             label: bridge.projectName
             active: win.barMenu === "project"

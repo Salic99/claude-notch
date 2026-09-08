@@ -32,6 +32,11 @@ case "${1:-toggle}" in
   toggle|show|hide|menu|plus|details|voice)
            running || start
            call "$1" ;;
+  say)     running || start
+           qdbus6 "$SVC" "$OBJ" "$SVC.say" "${*:2}" ;;
+  speech)  running || start
+           case "${2:-}" in on) qdbus6 "$SVC" "$OBJ" "$SVC.setSpeech" true ;; off) qdbus6 "$SVC" "$OBJ" "$SVC.setSpeech" false ;;
+                            stop) call speakStop ;; *) echo "usage: claude-notch speech on|off|stop" >&2; exit 2 ;; esac ;;
   bar)     running || start
            qdbus6 "$SVC" "$OBJ" "$SVC.bar" "${2:?usage: claude-notch bar plus|project|model}" ;;
   reload)  running && call reloadConfig || start ;;
@@ -48,6 +53,8 @@ case "${1:-toggle}" in
            echo "  claude-notch menu         open the orb menu"; echo "  claude-notch plus         open the + popup (files, folder, connectors, plugins)"
            echo "  claude-notch voice        dictate: start recording / stop and type it into the chat"
            echo "  claude-notch bar <name>   open a bar popup: plus | project | model"
+           echo "  claude-notch speech on|off|stop   read the chat's answers aloud (the speaker in the bar)"
+           echo "  claude-notch say <text>   speak a text"
            echo "  claude-notch details      pin the usage bubble"
            echo "  claude-notch add <file>…  mention files in the chat (opens it if needed)"
            echo "  claude-notch status | state | stop | restart" ;;

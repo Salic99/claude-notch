@@ -51,6 +51,7 @@ ACTIVITY_FILE = CACHE_DIR / "claude-notch-activity.json"   # written by the hook
 LOG_FILE = CACHE_DIR / "claude-notch.log"
 KWIN_SCRIPT = CACHE_DIR / "claude-notch-kwin.js"
 MODELS_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")) / "claude-notch" / "models"
+VOICES_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local" / "share")) / "claude-notch" / "voices"
 AUTOSTART_FILE = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "autostart" / "claude-notch.desktop"
 
 APP_ID = "claude-notch"                     # Wayland app_id of the notch window
@@ -91,6 +92,13 @@ DEFAULTS = {
         "language": "auto",     # whisper language code; "auto" detects
         "record": "pw-record --rate 16000 --channels 1 --format s16 {file}",
         "source": "auto",       # PipeWire source (microphone) name; "auto" = the system default
+    },
+    "speech": {                                 # Claude reads its answers aloud (the speaker in the bar)
+        "enabled": False,
+        "voice": "auto",        # a piper voice name in VOICES_DIR (e.g. "cs_CZ-jirka-medium"); "auto" picks by language
+        "max_chars": 700,       # longer answers are cut at a sentence end
+        "piper": "piper",       # the piper CLI (uv tool install piper-tts)
+        "play": "pw-play {file}",
     },
 }
 LANGUAGES = ("en", "cs")
@@ -433,7 +441,9 @@ class Bridge(QObject):
     detailsRequested = Signal()
     voiceChanged = Signal()
     terminalShownChanged = Signal()
+    speechChanged = Signal()
     _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
+    _speechDone = Signal(bool)             # from the speech thread
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -478,6 +488,12 @@ class Bridge(QObject):
         self._level_timer.setInterval(50)
         self._level_timer.timeout.connect(self._poll_level)
         self._voiceResult.connect(self._voice_done)
+        self._speechDone.connect(self._speech_finished)
+
+        # Speech: the last answer of the panel session, read by piper.
+        self._speaking = False
+        self._speech_procs: list[subprocess.Popen] = []
+        self._speech_seq = 0
 
     # ── usage feed ──────────────────────────────────────────────────────
     @staticmethod
@@ -915,6 +931,172 @@ class Bridge(QObject):
         """Called from inside each KWin script once it has run (see _kwin_worker)."""
         if seq == _kwin_ack_seq:
             _kwin_ack.set()
+
+    # ── speech ──────────────────────────────────────────────────────────
+    @Property(bool, notify=speechChanged)
+    def speechEnabled(self):
+        return bool(self.cfg["speech"].get("enabled"))
+
+    @Property(bool, notify=speechChanged)
+    def speaking(self):
+        return self._speaking
+
+    @Slot(bool)
+    def setSpeech(self, on: bool) -> None:
+        self.cfg["speech"]["enabled"] = bool(on)
+        set_config("speech", "enabled", bool(on))
+        if not on:
+            self.speakStop()
+        self.speechChanged.emit()
+
+    def _piper(self) -> str | None:
+        p = str(self.cfg["speech"].get("piper") or "piper")
+        return shutil.which(p) or (str(HOME / ".local" / "bin" / p) if (HOME / ".local" / "bin" / p).is_file() else None)
+
+    def _voice_for(self, text: str) -> Path | None:
+        want = str(self.cfg["speech"].get("voice", "auto") or "auto")
+        try:
+            voices = sorted(VOICES_DIR.glob("*.onnx"))
+        except OSError:
+            voices = []
+        if not voices:
+            return None
+        if want != "auto":
+            for v in voices:
+                if v.stem == want or v.name == want:
+                    return v
+            p = Path(os.path.expanduser(want))
+            return p if p.is_file() else voices[0]
+        # by language: Czech diacritics in the text, else the UI language, else whatever there is
+        lang = "cs" if re.search(r"[ěščřžýáíéůúďťňĚŠČŘŽÝÁÍÉŮÚĎŤŇ]", text) else self.cfg["ui"]["language"]
+        for v in voices:
+            if v.name.startswith(lang + "_"):
+                return v
+        return voices[0]
+
+    @staticmethod
+    def _speakable(text: str, limit: int) -> str:
+        """Plain sentences out of a markdown answer: no code, no tables, no link targets."""
+        t = re.sub(r"```.*?```", " ", text, flags=re.S)             # fenced code
+        t = re.sub(r"^\s*\|.*\|\s*$", " ", t, flags=re.M)             # table rows
+        t = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", t)             # [text](url)
+        t = re.sub(r"`([^`]*)`", r"\1", t)                             # inline code
+        t = re.sub(r"^\s{0,3}#{1,6}\s*", "", t, flags=re.M)            # headings
+        t = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", t, flags=re.M)    # list bullets
+        t = re.sub(r"^\s*>\s?", "", t, flags=re.M)                     # quotes
+        t = re.sub(r"[*_~]{1,3}(\S.*?\S|\S)[*_~]{1,3}", r"\1", t)     # emphasis
+        t = re.sub(r"https?://\S+", "", t)
+        t = re.sub(r"[ \t]+", " ", t)
+        t = re.sub(r"\s*\n\s*", "\n", t).strip()
+        if len(t) > limit:
+            cut = t[:limit]
+            end = max(cut.rfind(". "), cut.rfind(".\n"), cut.rfind("! "), cut.rfind("? "), cut.rfind("\n"))
+            t = (cut[: end + 1] if end > limit // 3 else cut).rstrip() + " …"
+        return t
+
+    @staticmethod
+    def _last_answer(transcript: Path) -> str:
+        """The text of the assistant's final message of the last turn in a Claude
+        Code transcript (.jsonl). `user` records that only carry tool results do
+        not start a new turn."""
+        text = ""
+        try:
+            with open(transcript, encoding="utf-8") as f:
+                for ln in f:
+                    try:
+                        rec = json.loads(ln)
+                    except ValueError:
+                        continue
+                    content = (rec.get("message") or {}).get("content")
+                    if rec.get("type") == "user":
+                        blocks = content if isinstance(content, list) else []
+                        if isinstance(content, str) or any(isinstance(b, dict) and b.get("type") == "text" for b in blocks):
+                            text = ""
+                        continue
+                    if rec.get("type") != "assistant" or not isinstance(content, list):
+                        continue
+                    parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                    t = "\n".join(x for x in parts if x.strip())
+                    if t:
+                        text = t
+        except OSError as e:
+            log(f"transcript unreadable ({e})")
+        return text
+
+    @Slot(str)
+    def turnEnded(self, transcript_path: str) -> None:
+        """From the Stop hook of the panel session: read the answer aloud if speech is on."""
+        if not self.speechEnabled or not transcript_path:
+            return
+        text = self._last_answer(Path(transcript_path))
+        if text:
+            self.say(text)
+
+    @Slot(str)
+    def notified(self, message: str) -> None:
+        """From the Notification hook: Claude waits on you — say so, briefly."""
+        if self.speechEnabled and message and not self._speaking:
+            self.say(message)
+
+    @Slot(str)
+    def say(self, text: str) -> None:
+        """Speak a text with piper (`claude-notch say "…"`). Interrupts what is being said."""
+        piper = self._piper()
+        voice = self._voice_for(text)
+        if piper is None or voice is None:
+            self._notify("Claude Notch", "Speech needs piper (uv tool install piper-tts) and a voice in "
+                         f"{VOICES_DIR} — see README: Speech.")
+            return
+        speech = self._speakable(text, int(self.cfg["speech"].get("max_chars", 700)))
+        if not speech:
+            return
+        self.speakStop()
+        self._speech_seq += 1
+        seq = self._speech_seq
+        out = CACHE_DIR / "claude-notch" / "speech"
+        out.mkdir(parents=True, exist_ok=True)
+        wav = out / f"say-{seq}.wav"
+        play = [a.replace("{file}", str(wav)) for a in shlex.split(self.cfg["speech"]["play"])]
+        self._speaking = True
+        self.speechChanged.emit()
+        log(f"speech: {len(speech)} chars, {voice.stem}")
+
+        def worker():
+            ok = False
+            try:
+                synth = subprocess.Popen([piper, "-m", str(voice), "-f", str(wav)], stdin=subprocess.PIPE,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                self._speech_procs.append(synth)
+                _, err = synth.communicate(speech, timeout=120)
+                if synth.returncode == 0 and wav.exists():
+                    player = subprocess.Popen(play, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self._speech_procs.append(player)
+                    player.wait()
+                    ok = True
+                elif synth.returncode not in (0, -signal.SIGTERM):
+                    log(f"piper failed ({synth.returncode}): {err.strip()[-200:]}")
+            except Exception as e:                       # noqa: BLE001
+                log(f"speech: {e}")
+            finally:
+                wav.unlink(missing_ok=True)
+                if seq == self._speech_seq:              # not superseded by a newer say()
+                    self._speechDone.emit(ok)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _speech_finished(self, ok: bool) -> None:
+        self._speaking = False
+        self._speech_procs = []
+        self.speechChanged.emit()
+
+    @Slot()
+    def speakStop(self) -> None:
+        procs, self._speech_procs = self._speech_procs, []
+        for pr in procs:
+            if pr.poll() is None:
+                pr.terminate()
+        if self._speaking:
+            self._speaking = False
+            self.speechChanged.emit()
 
     @Slot("QVariant")
     def reportState(self, st) -> None:
