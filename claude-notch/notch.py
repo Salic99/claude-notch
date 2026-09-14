@@ -14,6 +14,8 @@ resting notch only reacts to the sliver and the orb.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import os
 import re
@@ -429,14 +431,106 @@ workspace.windowList().forEach(function(win) {{
 """)
 
 
-def raise_window(cls: str) -> None:
+def raise_window(cls: str, activate: bool = False) -> None:
+    """activate=True also hands the window the keyboard."""
     run_kwin(f"""
 workspace.windowList().forEach(function(win) {{
     if (win.resourceClass !== "{cls}" || win.minimized) return;
     {_RAISE}
+    {"workspace.activeWindow = win;" if activate else ""}
 }});
 {_ABOVE if cls != APP_ID else ""}
 """)
+
+
+# ── drags in the air ───────────────────────────────────────────────────────
+# Wayland tells a client about a drag only once the pointer is over one of its
+# surfaces — too late for a drop onto the chat: the terminal sits in a hole of
+# the notch's input region, and alacritty (winit 0.30) takes no drops on Wayland.
+# KWin mirrors every drag to Xwayland, though: it owns the XdndSelection for as
+# long as a Wayland drag is in the air, and XFixes reports the owner to any X11
+# client that asks. So one idle Xwayland connection tells the notch when to close
+# the hole and catch the drop itself. Plain libxcb through ctypes — unlike Xlib,
+# it never exits the process when Xwayland goes away.
+class _XcbCookie(ctypes.Structure):
+    _fields_ = [("sequence", ctypes.c_uint)]
+
+
+class _XcbAtomReply(ctypes.Structure):                  # xcb_intern_atom_reply_t
+    _fields_ = [("response_type", ctypes.c_uint8), ("pad0", ctypes.c_uint8), ("sequence", ctypes.c_uint16),
+                ("length", ctypes.c_uint32), ("atom", ctypes.c_uint32)]
+
+
+class _XcbExtension(ctypes.Structure):                  # xcb_query_extension_reply_t
+    _fields_ = [("response_type", ctypes.c_uint8), ("pad0", ctypes.c_uint8), ("sequence", ctypes.c_uint16),
+                ("length", ctypes.c_uint32), ("present", ctypes.c_uint8), ("major_opcode", ctypes.c_uint8),
+                ("first_event", ctypes.c_uint8), ("first_error", ctypes.c_uint8)]
+
+
+class _XcbScreens(ctypes.Structure):                    # xcb_screen_iterator_t; an xcb_screen_t opens with its root
+    _fields_ = [("data", ctypes.POINTER(ctypes.c_uint32)), ("rem", ctypes.c_int), ("index", ctypes.c_int)]
+
+
+class _XfixesSelectionNotify(ctypes.Structure):         # xcb_xfixes_selection_notify_event_t
+    _fields_ = [("response_type", ctypes.c_uint8), ("subtype", ctypes.c_uint8), ("sequence", ctypes.c_uint16),
+                ("window", ctypes.c_uint32), ("owner", ctypes.c_uint32), ("selection", ctypes.c_uint32)]
+
+
+def watch_drags(on_drag, selection: bytes = b"XdndSelection") -> None:
+    """Call on_drag(True) whenever a drag takes off anywhere on the desktop, and
+    on_drag(False) once it has landed. Runs for good (start it on a daemon
+    thread); returns at once without Xwayland or libxcb-xfixes."""
+    libs = ctypes.util.find_library("xcb"), ctypes.util.find_library("xcb-xfixes")
+    if not os.environ.get("DISPLAY") or None in libs:
+        log("drag watch: no Xwayland or libxcb-xfixes — drag over the bar first to drop onto the terminal")
+        return
+    xcb, xfixes, libc = ctypes.CDLL(libs[0]), ctypes.CDLL(libs[1]), ctypes.CDLL(None)
+    ptr, card = ctypes.c_void_p, ctypes.c_uint32
+    for lib, name, restype, argtypes in (
+            (xcb, "xcb_connect", ptr, [ctypes.c_char_p, ptr]),
+            (xcb, "xcb_connection_has_error", ctypes.c_int, [ptr]),
+            (xcb, "xcb_disconnect", None, [ptr]),
+            (xcb, "xcb_flush", ctypes.c_int, [ptr]),
+            (xcb, "xcb_get_setup", ptr, [ptr]),
+            (xcb, "xcb_setup_roots_iterator", _XcbScreens, [ptr]),
+            (xcb, "xcb_get_extension_data", ctypes.POINTER(_XcbExtension), [ptr, ptr]),
+            (xcb, "xcb_intern_atom", _XcbCookie, [ptr, ctypes.c_uint8, ctypes.c_uint16, ctypes.c_char_p]),
+            (xcb, "xcb_intern_atom_reply", ctypes.POINTER(_XcbAtomReply), [ptr, _XcbCookie, ptr]),
+            (xcb, "xcb_wait_for_event", ctypes.POINTER(_XfixesSelectionNotify), [ptr]),
+            (xfixes, "xcb_xfixes_query_version", _XcbCookie, [ptr, card, card]),
+            (xfixes, "xcb_xfixes_query_version_reply", ptr, [ptr, _XcbCookie, ptr]),
+            (xfixes, "xcb_xfixes_select_selection_input", _XcbCookie, [ptr, card, card, card]),
+            (libc, "free", None, [ptr])):
+        fn = getattr(lib, name)
+        fn.restype, fn.argtypes = restype, argtypes
+    xfixes_id = ctypes.addressof(ctypes.c_char.in_dll(xfixes, "xcb_xfixes_id"))
+    while True:                                          # (re)connect: Xwayland may come late, or restart
+        conn = xcb.xcb_connect(None, None)
+        try:
+            ext = None if xcb.xcb_connection_has_error(conn) else xcb.xcb_get_extension_data(conn, xfixes_id)
+            if ext and not ext.contents.present:
+                log("drag watch: Xwayland lacks XFixes")
+                return
+            if ext:
+                # XFixes serves only a client that has told the server its version.
+                libc.free(xfixes.xcb_xfixes_query_version_reply(conn, xfixes.xcb_xfixes_query_version(conn, 5, 0), None))
+                reply = xcb.xcb_intern_atom_reply(conn, xcb.xcb_intern_atom(conn, 0, len(selection), selection), None)
+                atom = reply.contents.atom if reply else 0
+                libc.free(reply)
+                root = xcb.xcb_setup_roots_iterator(xcb.xcb_get_setup(conn)).data[0]
+                xfixes.xcb_xfixes_select_selection_input(conn, root, atom, 1 | 2 | 4)   # owner set, its window or client gone
+                xcb.xcb_flush(conn)
+                log(f"drag watch: listening for the {selection.decode()} owner on Xwayland")
+                while ev := xcb.xcb_wait_for_event(conn):       # NULL once the connection is gone
+                    e = ev.contents
+                    if (e.response_type & 0x7f) == ext.contents.first_event:    # + XCB_XFIXES_SELECTION_NOTIFY (0)
+                        on_drag(e.subtype == 0 and e.owner != 0)
+                    libc.free(ev)
+                on_drag(False)
+                log("drag watch: lost Xwayland, reconnecting")
+        finally:
+            xcb.xcb_disconnect(conn)
+        time.sleep(10)
 
 
 # ── the bridge between Python and QML (also exported on D-Bus) ─────────────
@@ -454,9 +548,11 @@ class Bridge(QObject):
     voiceChanged = Signal()
     terminalShownChanged = Signal()
     speechChanged = Signal()
+    dragChanged = Signal()
     _voiceResult = Signal(str)             # from the transcription thread to the GUI thread
     _convResult = Signal(str)              # the same, for the conversation
     _speechDone = Signal(bool)             # from the speech thread
+    _dragSeen = Signal(bool)               # from the drag watch thread
 
     def __init__(self, cfg: dict):
         super().__init__()
@@ -516,6 +612,11 @@ class Bridge(QObject):
         self._speaking = False
         self._speech_procs: list[subprocess.Popen] = []
         self._speech_seq = 0
+
+        # Drops onto the terminal: whether a drag is in the air anywhere (see watch_drags).
+        self._dragging = False
+        self._dragSeen.connect(self._drag_seen)
+        threading.Thread(target=watch_drags, args=(self._dragSeen.emit,), daemon=True).start()
 
     # ── usage feed ──────────────────────────────────────────────────────
     @staticmethod
@@ -695,8 +796,11 @@ class Bridge(QObject):
         threading.Thread(target=worker, daemon=True).start()
 
     def _mention(self, paths: list[str]) -> None:
-        if paths and self._type("".join(f"@{p} " for p in paths)):
-            raise_window(TERM_CLASS)
+        # A path with spaces goes in as @"…", which Claude Code reads as one mention. The
+        # chat then takes the keyboard, so the question can follow right away.
+        text = "".join(f'@"{p}" ' if re.search(r"\s", p) else f"@{p} " for p in paths)
+        if paths and self._type(text):
+            raise_window(TERM_CLASS, activate=True)
 
     @Slot()
     def addFiles(self) -> None:
@@ -732,6 +836,17 @@ class Bridge(QObject):
             p = os.path.abspath(os.path.expanduser(p))
             paths.append(p.rstrip("/") + "/" if os.path.isdir(p) else p)
         self._mention(paths)
+
+    @Property(bool, notify=dragChanged)
+    def dragging(self):
+        """A drag is in the air somewhere on the desktop; QML then catches drops over the terminal."""
+        return self._dragging
+
+    def _drag_seen(self, active: bool) -> None:
+        if active != self._dragging:
+            log(f"drag: {'in the air' if active else 'landed'}")
+        self._dragging = active
+        self.dragChanged.emit()                # on a repeat too: each new drag re-arms the drop over the terminal
 
     @Slot()
     def pasteImage(self) -> None:
@@ -1358,7 +1473,7 @@ class Bridge(QObject):
                            "activity": self._activity,
                            "panelActivity": self._panel_activity, "panelSession": self._usage.get("panelSession"),
                            "voiceState": self._voice_state, "conversation": self._conv, "speaking": self._speaking,
-                           "speech": self.speechEnabled,
+                           "speech": self.speechEnabled, "dragging": self._dragging,
                            "usage_fiveHour": self._usage.get("fiveHour"),
                            "usage_writtenAt": self._usage.get("writtenAt"),
                            "mask": getattr(self, "_mask_rects", None),

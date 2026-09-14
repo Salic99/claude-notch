@@ -72,6 +72,7 @@ Other flags: `--with-plasmoid` (a panel widget with the same rings), `--with-cra
 | hover the orb below the notch, click it | the menu (`claude-notch menu`) |
 | the bar under the terminal | **+** (files, folder, clipboard image, `/mcp`, `/plugin` — `claude-notch plus`), the **mic** (`claude-notch voice`), the **project** and **model** pickers, the context gauge, **Stop** |
 | `claude-notch add <file>…` | mention files in the chat |
+| drop files or photos onto the chat | the same, by hand — onto the terminal, the bar or the strip |
 | `claude-notch bar plus\|project\|model` | open one of the bar's popups |
 | `claude-notch start` / `stop` / `restart` / `status` | lifecycle |
 | `claude-notch reload` | re-read `config.toml` live (also after hand-editing it) |
@@ -106,7 +107,9 @@ The **+** popup:
 | Connectors | `/mcp` — Claude Code's MCP server dialog |
 | Plugins | `/plugin` — the plugin manager |
 
-Mentions are inserted without pressing Enter, so you can add your question after them. Two more ways in: **drag files** from your file manager onto the bar or the strip, or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
+Mentions are inserted without pressing Enter, and the chat takes the keyboard, so you can type your question right after them; a path with spaces goes in as `@"…"`. Two more ways in: **drop files or photos onto the chat** — right onto the terminal, or onto the bar or the strip — or run `claude-notch add <file>…` from a shell. `./install.sh --plus-shortcut 'Meta+Shift+A'` binds a key to the popup.
+
+The terminal cannot take a drop itself (alacritty has no drag and drop on Wayland), so the notch catches it. It learns that a drag has taken off from Xwayland — KWin owns the X11 `XdndSelection` for as long as a Wayland drag is in the air — and for that moment closes the hole it keeps over the terminal; once the drag has landed, the terminal gets its pointer back. Without Xwayland, drag over the bar or the strip first, then onto the terminal.
 
 ### Conversation
 

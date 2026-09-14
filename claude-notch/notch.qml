@@ -22,6 +22,9 @@ Window {
     readonly property int panelW:  lay.panel_w
     readonly property int chatInset: lay.inset
     readonly property int barH: lay.bar                    // the "+" bar under the terminal
+    // The terminal's rectangle: a hole in the container, open for paint and input.
+    readonly property rect termRect: Qt.rect(lay.pad, chatInset + lay.pad, width - stripW - lay.pad,
+                                             height - 2 * (chatInset + lay.pad) - barH)
 
     width:  fullW
     height: bridge.winH
@@ -86,6 +89,14 @@ Window {
         && shape.sh >= height - 2 * chatInset - 1
     onTerminalCoveredChanged: if (terminalCovered) bridge.revealTerminal()
 
+    // Drops onto the terminal. It takes none itself (alacritty has no Wayland drag and
+    // drop), so while a drag is in the air — bridge.dragging, seen through Xwayland — or
+    // over the bar or the strip, the hole closes for input and the DropArea catches the
+    // drop there. Plain pointer input in the hole means that drag is long gone: the hole
+    // opens again until the next one (see termDrop).
+    property bool dropStale: false
+    readonly property bool dropArmed: chat && (drop.containsDrag || (bridge.dragging && !dropStale))
+
     property bool hover: false
     property bool suppressHover: false     // after a closing click, until the pointer leaves
     property bool pinInfo: false           // "Show details" from the menu keeps the bubble open
@@ -122,6 +133,7 @@ Window {
         function onBarRequested(which) { win.toggleBarMenu(which) }
         function onVoiceChanged() { micGlyph.requestPaint() }
         function onDetailsRequested() { win.pinInfo = !win.pinInfo }
+        function onDragChanged() { win.dropStale = false }
     }
 
     // ── input region: the window only reacts where something is drawn ──
@@ -134,6 +146,7 @@ Window {
             r.push([lay.pad, H - chatInset - lay.pad - barH, W - stripW - lay.pad, barH])
             var pop = activePopup()
             if (pop) r.push([pop.x - 6, pop.y - 6, pop.width + 12, pop.height + 12])
+            if (dropArmed) r.push([termRect.x, termRect.y, termRect.width, termRect.height])
         }
         else if (showBubble || pinInfo) {
             var hw = bubbleW + 10 + panelW + 12, hh = Math.max(bubbleH, 200) + 60
@@ -308,8 +321,8 @@ Window {
                 // until the chat closes — so it is never painted over, and never
                 // shows the desktop through the hole before it is there.
                 if (win.chat && win.chatVisual && bridge.terminalShown) {
-                    var pad = lay.pad, ins = win.chatInset
-                    ctx.clearRect(pad, ins + pad, W - win.stripW - pad, height - 2 * (ins + pad) - win.barH)
+                    var tr = win.termRect
+                    ctx.clearRect(tr.x, tr.y, tr.width, tr.height)
                 }
             }
             onWidthChanged: requestPaint()
@@ -501,12 +514,56 @@ Window {
         onEntered: { if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true; bridge.reload() }
         onExited:  { win.hover = false; win.suppressHover = false }
         onPositionChanged: if (!win.chat && !win.suppressHover && !win.menuOpen) win.hover = true
-        onClicked: {
+        onClicked: (mouse) => {
             if (win.menuOpen) { win.menuOpen = false; return }
             if (win.pinInfo)  { win.pinInfo = false; return }
+            // Over the terminal (a popup's margin, a drop catcher about to let go): never fold the chat.
+            var tr = win.termRect
+            if (win.chat && mouse.x >= tr.x && mouse.x < tr.x + tr.width && mouse.y >= tr.y && mouse.y < tr.y + tr.height) return
             win.hover = false
             if (win.chat) win.suppressHover = true
             bridge.toggle()
+        }
+    }
+
+    // ── the terminal as a drop target (see dropArmed) ────────────────
+    Item {
+        id: termDrop
+        x: win.termRect.x; y: win.termRect.y
+        width: win.termRect.width; height: win.termRect.height
+        enabled: win.dropArmed
+        // Pointer input gets here only while the hole is closed for a drag. A plain hover is
+        // no drag: open the hole again (mainArea sees to it that a click never folds the chat).
+        HoverHandler { onHoveredChanged: if (hovered) win.dropStale = true }
+
+        Rectangle {
+            anchors.fill: parent; anchors.margins: 6
+            radius: 14
+            readonly property color bg: pal.background
+            color: Qt.rgba(bg.r, bg.g, bg.b, 0.62)
+            border.color: win.colorFor(30); border.width: 1.5
+            opacity: drop.containsDrag && bridge.terminalShown ? 1 : 0
+            visible: opacity > 0.01
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+            Column {
+                anchors.centerIn: parent
+                spacing: 12
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 46; height: 46; radius: 23
+                    color: Qt.rgba(1, 1, 1, 0.12)
+                    border.color: Qt.rgba(1, 1, 1, 0.18); border.width: 1
+                    Text {
+                        anchors.centerIn: parent; anchors.verticalCenterOffset: -2
+                        text: "+"; color: "#ebebf0"; font.pixelSize: 32; font.weight: Font.Light
+                    }
+                }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: win.txt.dropHint || ""
+                    color: "#ebebf0"; font.pixelSize: 13
+                }
+            }
         }
     }
 
@@ -769,7 +826,7 @@ Window {
         }
     }
 
-    // Files dragged onto the panel (the + bar or the strip) become @mentions.
+    // Files dragged onto the panel — the terminal (termDrop), the + bar or the strip — become @mentions.
     DropArea {
         id: drop
         anchors.fill: parent
