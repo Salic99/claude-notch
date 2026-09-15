@@ -1797,8 +1797,19 @@ class Bridge(QObject):
             place(TERM_CLASS, x, y, w, h, raise_it=True)
 
     @Slot()
-    def restart(self) -> None:      # alias kept for the menu and older callers
-        self.reloadConfig()
+    def restart(self) -> None:
+        """A real restart, for the menu: hand it to the CLI, which quits this
+        instance, waits for the D-Bus name to be released, and starts a fresh
+        one. execv from inside the loop would race the Wayland window and the
+        name; the CLI polls, so it cannot. The chat (terminal + tmux) survives
+        and the new instance reattaches to it. Flags such as -v carry over."""
+        launcher = shutil.which("claude-notch") or str(HOME / ".local/bin/claude-notch")
+        if not os.access(launcher, os.X_OK):
+            self._notify("Claude Notch", "claude-notch CLI not found — run install.sh")
+            return
+        log("restart: handing over to the CLI")
+        subprocess.Popen([launcher, "restart", *sys.argv[1:]], start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     @staticmethod
     def _notify(title: str, body: str) -> None:
