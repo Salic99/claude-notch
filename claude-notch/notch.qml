@@ -36,7 +36,7 @@ Window {
               chatOpen: "Open chat", chatClose: "Close chat", newSession: "New session",
               continueSession: "Continue last session", project: "Project", window: "Open in a window",
               details: "Show details", refresh: "Refresh", settings: "Settings",
-              restart: "Restart notch", quit: "Quit", monitor: "Monitor", width: "Panel width",
+              restart: "Restart notch", quit: "Quit", account: "Account", login: "Log in", logout: "Log out", monitor: "Monitor", width: "Panel width",
               autostart: "Start at login", language: "Language", editConfig: "Edit config file",
               log: "View log", about: "About", back: "Back", halfScreen: "Half of the screen",
               langSystem: "System", version: "Version", repo: "Project page",
@@ -53,7 +53,7 @@ Window {
               chatOpen: "Otevřít chat", chatClose: "Zavřít chat", newSession: "Nová relace",
               continueSession: "Pokračovat v poslední", project: "Projekt", window: "Otevřít v okně",
               details: "Zobrazit podrobnosti", refresh: "Obnovit", settings: "Nastavení",
-              restart: "Restartovat notch", quit: "Ukončit", monitor: "Monitor", width: "Šířka panelu",
+              restart: "Restartovat notch", quit: "Ukončit", account: "Účet", login: "Přihlásit", logout: "Odhlásit", monitor: "Monitor", width: "Šířka panelu",
               autostart: "Spouštět po přihlášení", language: "Jazyk", editConfig: "Upravit konfiguraci",
               log: "Zobrazit log", about: "O aplikaci", back: "Zpět", halfScreen: "Polovina obrazovky",
               langSystem: "Podle systému", version: "Verze", repo: "Stránka projektu",
@@ -707,6 +707,7 @@ Window {
             { l: T.refresh,         a: function() { bridge.reload() } },
             { sep: true },
             { l: T.settings,        sub: "settings" },
+            { l: T.account,         sub: "account" },
             { l: T.about,           sub: "about" },
             { sep: true },
             { l: T.restart,         a: function() { bridge.restart() } },
@@ -721,6 +722,10 @@ Window {
             { sep: true },
             { l: T.editConfig, a: function() { bridge.openConfig() } },
             { l: T.log,        a: function() { bridge.openLog() } }
+        ]
+        case "account": return [
+            { l: T.login,  a: function() { bridge.account("/login") } },
+            { l: T.logout, a: function() { bridge.account("/logout") } }
         ]
         case "project": return bridge.projects.map(function(p) {
             return { l: p.name, check: p.current, a: function() { bridge.setProject(p.path) } } })

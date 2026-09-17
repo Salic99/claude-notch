@@ -180,6 +180,7 @@ Below the notch sits a small hook — the **orb**. Hover it and the hook curls u
 | **Open in a window** | the same agent in a normal, decorated terminal window for longer work |
 | **Show details** | keeps the usage bubble open until you click elsewhere |
 | **Settings ›** | **Monitor** (lists your outputs), **Panel width**, **Start at login**, **Language**, **Microphone** (for dictation; picking a muted one unmutes it), plus *Edit config file* and *View log* |
+| **Account ›** | **Log in** / **Log out** — opens the chat and types `/login` or `/logout` into its session |
 | **Restart notch** / **Quit** | a real restart (`claude-notch restart`): the chat's terminal and its tmux session survive it |
 
 Settings that change the layout are written to `config.toml` (comments preserved) and applied **live** — monitor, panel width and language take effect without restarting; the chat's terminal keeps its session. After editing `config.toml` by hand, `claude-notch reload` (or the menu) re-reads it.

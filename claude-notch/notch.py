@@ -818,6 +818,17 @@ class Bridge(QObject):
         if self._type(cmd, enter=True):
             raise_window(TERM_CLASS)
 
+    @Slot(str)
+    def account(self, cmd: str) -> None:
+        """Menu > Account: /login or /logout, typed into the chat's session. A
+        session that has yet to start gets a moment to come up first."""
+        if cmd not in ("/login", "/logout"):
+            return
+        wait = 0 if self._chat else (700 if self._session_alive() else 5000)
+        if not self._chat:
+            self.show()
+        QTimer.singleShot(wait, lambda: self.sendCommand(cmd))
+
     @Slot()
     def interrupt(self) -> None:
         """Escape into the agent — Claude Code stops the running turn."""
