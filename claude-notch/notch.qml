@@ -228,7 +228,8 @@ Window {
         return h > 0 ? (h + " h " + m + " m") : (Math.max(1, m) + " min")
     }
 
-    Component.onCompleted: { visible = true; updateBubble(); bridge.applyMask(hotRects) }
+    // Python maps the window (bridge.showWindow) once KWin is ready to place it.
+    Component.onCompleted: { updateBubble(); bridge.applyMask(hotRects) }
     Timer { interval: 30000; running: true; repeat: true; onTriggered: win.now = Date.now() / 1000 }
 
     // ── the starburst: the real mark if the installer extracted one from a locally

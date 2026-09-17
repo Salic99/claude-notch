@@ -376,11 +376,12 @@ workspace.windowList().forEach(function(win) {{
 
 
 def place_on_map(cls: str, x: int, y: int, w: int, h: int, *, fade_ms: int,
-                 timeout_ms: int = 20000) -> None:
+                 timeout_ms: int = 20000, armed: str = "") -> None:
     """Catch a window the instant KWin maps it and put it in place before its
     first frame is shown, so a freshly launched terminal never flashes at
     KWin's default (centred) position. Also handles a window that mapped
-    before the script loaded. The hook disarms itself after timeout_ms."""
+    before the script loaded. The hook disarms itself after timeout_ms.
+    `armed` names a notch D-Bus slot to call once the hook is listening."""
     run_kwin(f"""
 var done = false;
 function grab(win) {{
@@ -399,6 +400,7 @@ workspace.windowList().forEach(grab);
 var stop = new QTimer(); stop.interval = {timeout_ms}; stop.singleShot = true;
 stop.timeout.connect(function() {{ workspace.windowAdded.disconnect(grab); }});
 stop.start();
+{f'callDBus("{DBUS_SERVICE}", "{DBUS_PATH}", "{DBUS_SERVICE}", "{armed}");' if armed else ""}
 """)
 
 
@@ -1823,11 +1825,27 @@ class Bridge(QObject):
         if self._pending_rects is not None:
             self.applyMask(self._pending_rects)
 
-    def pin(self) -> None:
+    def _pin_rect(self) -> tuple[int, int, int, int]:
         gx, gy, gw, gh = self._geo
-        x, y = gx + gw - self.L["width"], gy + (gh - self._win_h) // 2
-        log(f"pin -> {x},{y} {self.L['width']}x{self._win_h}  (geo={self._geo})")
-        place(APP_ID, x, y, self.L["width"], self._win_h)
+        return gx + gw - self.L["width"], gy + (gh - self._win_h) // 2, self.L["width"], self._win_h
+
+    def pin(self) -> None:
+        x, y, w, h = self._pin_rect()
+        log(f"pin -> {x},{y} {w}x{h}  (geo={self._geo})")
+        place(APP_ID, x, y, w, h)
+
+    def pin_on_map(self) -> None:
+        """At startup: the window stays unmapped until KWin is listening for it
+        (→ showWindow), so it is put on the edge before its first frame instead
+        of appearing at KWin's centred default and travelling to the corner."""
+        x, y, w, h = self._pin_rect()
+        log(f"pin on map -> {x},{y} {w}x{h}  (geo={self._geo})")
+        place_on_map(APP_ID, x, y, w, h, fade_ms=160, armed="showWindow")
+
+    @Slot()
+    def showWindow(self) -> None:
+        if self._window is not None and not self._window.isVisible():
+            self._window.setVisible(True)
 
     @Slot("QVariantList")
     def applyMask(self, rects) -> None:
@@ -1876,10 +1894,12 @@ def main() -> int:
         return 1
     bridge.attach_window(engine.rootObjects()[0], engine)
 
-    # The compositor decides where a Wayland window goes; pin it (twice, in
-    # case the first placement races the window mapping).
-    QTimer.singleShot(1200, bridge.pin)
-    QTimer.singleShot(3000, bridge.pin)
+    # The compositor decides where a Wayland window goes: map the window only
+    # once KWin is ready to catch it, then pin it again in case that was lost.
+    bridge.pin_on_map()
+    QTimer.singleShot(1500, bridge.showWindow)           # KWin never answered: show it anyway
+    QTimer.singleShot(2000, bridge.pin)
+    QTimer.singleShot(3500, bridge.pin)
     # A terminal left behind by a previous instance would sit over the folded notch.
     QTimer.singleShot(1500, lambda: hide_window(TERM_CLASS))
     return app.exec()
