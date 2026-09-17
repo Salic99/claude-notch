@@ -8,7 +8,7 @@ OBJ=/Notch
 
 running() { qdbus6 "$SVC" >/dev/null 2>&1; }
 call()    { qdbus6 "$SVC" "$OBJ" "$SVC.$1" >/dev/null 2>&1 || qdbus6 "$SVC" "$OBJ" "$1" >/dev/null 2>&1; }
-owner_pid() { qdbus6 org.freedesktop.DBus / org.freedesktop.DBus.GetConnectionUnixProcessID "$SVC" 2>/dev/null; }
+owner_pid() { qdbus6 org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetConnectionUnixProcessID "$SVC" 2>/dev/null || true; }
 stop() {
   running || return 0
   call quit
@@ -41,7 +41,8 @@ case "${1:-toggle}" in
            qdbus6 "$SVC" "$OBJ" "$SVC.bar" "${2:?usage: claude-notch bar plus|project|model}" ;;
   reload)  running && call reloadConfig || start ;;
   stop)    stop ;;
-  restart) stop; start "${@:2}" ;;
+  restart) stop || { echo "claude-notch: the running instance will not quit" >&2; exit 1; }
+           start "${@:2}" ;;
   status)  if running; then echo "running"; else echo "stopped"; exit 1; fi ;;
   state)   qdbus6 "$SVC" "$OBJ" "$SVC.state" ;;
   add)     running || { start; sleep 2; }
